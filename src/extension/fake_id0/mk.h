@@ -6,5 +6,6 @@
 #include "extension/fake_id0/config.h"
 
 int handle_mk_enter_end(Tracee *tracee, Reg fd_sysarg, Reg path_sysarg, Reg mode_sysarg, Config *config);
+int handle_mk_exit_end(Tracee *tracee, Reg path_sysarg, Reg mode_sysarg, Config *config);
 
 #endif /* FAKE_ID0_MK_H */

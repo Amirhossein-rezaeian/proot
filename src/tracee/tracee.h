@@ -287,6 +287,9 @@ typedef struct tracee {
 	/* For diagnostic purpose.  */
 	const char *tool_name;
 
+	/*For knowing when to create a new meta entry*/
+	bool already_exists;
+
 } Tracee;
 
 #define HOST_ROOTFS "/host-rootfs"

@@ -8,7 +8,7 @@
 #include "extension/fake_id0/utimensat.h"
 #include "extension/fake_id0/helper_functions.h"
 
-/** Handles the utimensat syscall. Checks permissions of the meta file if it
+/** Handles the utimensat syscall. Checks permissions from the meta info if it
  *  exists and returns an error if the call would not pass according to the 
  *  errors found in utimensat(2).
  */
@@ -21,7 +21,6 @@ int handle_utimensat_enter_end(Tracee *tracee, Reg dirfd_sysarg,
 	uid_t owner;
 	gid_t ignore_g;
 	char path[PATH_MAX];
-	char meta_path[PATH_MAX];
 
 	// Only care about calls that attempt to change something.
 	status = peek_reg(tracee, ORIGINAL, times_sysarg);
@@ -45,17 +44,13 @@ int handle_utimensat_enter_end(Tracee *tracee, Reg dirfd_sysarg,
 			return status;
 	}
 
-	status = get_meta_path(path, meta_path);
-	if(status < 0)
-		return status;
-
 	// Current user must be owner of file or root.
-	read_meta_file(meta_path, &ignore_m, &owner, &ignore_g, config);
+	read_meta_info(path, &ignore_m, &owner, &ignore_g, config);
 	if(config->euid != owner && config->euid != 0) 
 		return -EACCES;
 
 	// If write permissions are on the file, continue.
-	perms = get_permissions(meta_path, config, 0);
+	perms = get_permissions(path, config, 0);
 	if((perms & 2) != 2)
 		return -EACCES;
 

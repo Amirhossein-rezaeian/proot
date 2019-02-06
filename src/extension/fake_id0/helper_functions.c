@@ -4,7 +4,11 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <stdlib.h>
+#include <string.h>
+#include <leveldb/c.h>
 
+#include "cli/note.h"
 #include "syscall/syscall.h"
 #include "syscall/sysnum.h"
 #include "tracee/tracee.h"
@@ -19,6 +23,15 @@
 #define OWNER_PERMS	 0
 #define GROUP_PERMS	 1
 #define OTHER_PERMS	 2
+
+#ifndef DB_PATH
+#define DB_PATH "/support/meta_db"
+#endif
+
+leveldb_t *db;
+leveldb_options_t *options;
+leveldb_readoptions_t *roptions;
+leveldb_writeoptions_t *woptions;
 
 /** Converts a decimal number to its octal representation. Used to convert
  *  system returned modes to a more common form for humans.
@@ -171,7 +184,7 @@ char * get_name(char path[PATH_MAX])
 /** Returns the mode pertinent to the level of permissions the user has. Eg if
  *  uid 1000 tries to access a file it owns with mode 751, this returns 7.
  */
-int get_permissions(char meta_path[PATH_MAX], Config *config, bool uses_real)
+int get_permissions(char path[PATH_MAX], Config *config, bool uses_real)
 {
 	int perms;
 	int omode;
@@ -179,17 +192,15 @@ int get_permissions(char meta_path[PATH_MAX], Config *config, bool uses_real)
 	uid_t owner, emulated_uid;
 	gid_t group, emulated_gid;
 
-	int status = read_meta_file(meta_path, &mode, &owner, &group, config);
-	if(status < 0)
-		return status;
+	read_meta_info(path, &mode, &owner, &group, config);
 
-	if(uses_real) {
+	if (uses_real) {
 		emulated_uid = config->ruid;
 		emulated_gid = config->rgid;
-	}
-	else
+	} else {
 		emulated_uid = config->euid;
 		emulated_gid = config->egid;
+	}
 
 	if (emulated_uid == owner || emulated_uid == 0)
 		perms = OWNER_PERMS;
@@ -224,18 +235,14 @@ int get_permissions(char meta_path[PATH_MAX], Config *config, bool uses_real)
  */
 int check_dir_perms(Tracee *tracee, char type, char path[PATH_MAX], char rel_path[PATH_MAX], Config *config)
 {
-	int status, perms;
-	char meta_path[PATH_MAX];
+	int perms;
 	char shorten_path[PATH_MAX];
 	int x = 1; 
 	int w = 2;
 
 	get_dir_path(path, shorten_path);
-	status = get_meta_path(shorten_path, meta_path); 
-	if(status < 0)
-		return status;
 
-	perms = get_permissions(meta_path, config, 0);
+	perms = get_permissions(shorten_path, config, 0);
 
 	if(type == 'w' && (perms & w) != w) 
 		return -EACCES;
@@ -248,14 +255,9 @@ int check_dir_perms(Tracee *tracee, char type, char path[PATH_MAX], char rel_pat
 		if(!belongs_to_guestfs(tracee, shorten_path))
 			break;
 
-		status = get_meta_path(shorten_path, meta_path);
-		if(status < 0)
-			return status;
-
-		perms = get_permissions(meta_path, config, 0);
+		perms = get_permissions(shorten_path, config, 0);
 		if((perms & x) != x) 
 			return -EACCES;
-		
 	}
 
 	return 0;
@@ -308,44 +310,102 @@ int get_meta_path(char orig_path[PATH_MAX], char meta_path[PATH_MAX])
 	return 0;
 }
 
+void init_meta_hash(Tracee *tracee) {
+	char db_path[PATH_MAX];
+	char *err = NULL;
+	int status;
+
+	status = translate_path(tracee, db_path, AT_FDCWD, DB_PATH, false); 
+	if (status < 0)
+		return;
+
+	options = leveldb_options_create();
+	leveldb_options_set_create_if_missing(options, 1);
+	db = leveldb_open(options, db_path, &err);
+
+	if (err != NULL) {
+		VERBOSE(tracee, 2, "Failed to open Meta DB: %s", err);
+	} else {
+		VERBOSE(tracee, 9, "Succeeded to open Meta DB.");
+	}
+
+	/* reset error var */
+	leveldb_free(err); err = NULL;
+
+	woptions = leveldb_writeoptions_create();
+	roptions = leveldb_readoptions_create();
+}
+
 /** Stores in mode, owner, and group the relative information found in the meta
- *  meta file. If the meta file doesn't exist, it reverts back to the original
+ *  info. If the meta info doesn't exist, it reverts back to the original
  *  functionality of PRoot, with the addition of setting the mode to 755.
  */
 
-int read_meta_file(char path[PATH_MAX], mode_t *mode, uid_t *owner, gid_t *group, Config *config)
+int read_meta_info(char path[PATH_MAX], mode_t *mode, uid_t *owner, gid_t *group, Config *config)
 {
 	FILE *fp;
 	int lcl_mode;
-	fp = fopen(path, "r");
-	if(!fp) {
+	int status;
+	char meta_path[PATH_MAX];
+	struct stat statBuf;
+	size_t read_len;
+	struct stat *hash_read_value;
+	char* err = NULL;
+	ino_t addr;
+	Tracee *tracee = NULL;
+
+	status = lstat(path, &statBuf);
+
+	addr = statBuf.st_ino;
+	if ((status == 0) && (addr > 0)) {
+		hash_read_value = (struct stat *)leveldb_get(db, roptions, (char *)&addr, sizeof(ino_t), &read_len, &err);
+
+		if (err != NULL) {
+			read_len = 0;
+			VERBOSE(tracee, 2, "Meta DB read failed: %s", err);
+		}
+
+		leveldb_free(err); err = NULL;
+	}
+
+        if ((status == 0) && (read_len > 0) && (addr > 0)) {
+		*mode = hash_read_value->st_mode;
+		*owner = hash_read_value->st_uid;
+		*group = hash_read_value->st_gid;
+		return 0;
+	}
+
+	status = get_meta_path(path, meta_path);
+	fp = fopen(meta_path, "r");
+	if(!fp || (status < 0)) {
 		/* If the metafile doesn't exist, allow overly permissive behavior. */
 		*owner = config->euid;
 		*group = config->egid;
-		*mode = otod(755);
+		*mode = otod(777);
 		return 0;
-
 	}
 	fscanf(fp, "%d %d %d ", &lcl_mode, owner, group);
-	lcl_mode = otod(lcl_mode);
-	*mode = (mode_t)lcl_mode;
+	*mode = otod(lcl_mode);
+	write_meta_info(path, *mode, *owner, *group, false, config);
+	unlink(meta_path);
 	fclose(fp);
+
 	return 0;
 }
 
-/** Writes mode, owner, and group to the meta file specified by path. If 
+/** Writes mode, owner, and group to the meta info specified by path. If 
  *  is_creat is set to true, the umask needs to be used since it would have
  *  been by a real system call.
  */
-
-int write_meta_file(char path[PATH_MAX], mode_t mode, uid_t owner, gid_t group,
+int write_meta_info(char path[PATH_MAX], mode_t mode, uid_t owner, gid_t group,
 	bool is_creat, Config *config)
 {
-	FILE *fp;
-	fp = fopen(path, "w");
-	if(!fp)
-		//Errno is set
-		return -1;
+	struct stat statBuf;
+	int status;
+	struct stat *ht_value;
+	char* err = NULL;
+	ino_t addr;
+	Tracee *tracee = NULL;
 
 	/** In syscalls that don't have the ability to create a file (chmod v open)
 	 *  for example, the umask isn't used in determining the permissions of the
@@ -354,8 +414,54 @@ int write_meta_file(char path[PATH_MAX], mode_t mode, uid_t owner, gid_t group,
 	if(is_creat)
 		mode = (mode & ~(config->umask) & 0777);
 
-	fprintf(fp, "%d\n%d\n%d\n", dtoo(mode), owner, group);
-	fclose(fp);
+	status = lstat(path, &statBuf);
+	addr = statBuf.st_ino;
+
+	if ((status == 0) && (addr > 0)) {
+        	ht_value = malloc(sizeof(struct stat));
+        	ht_value->st_mode = mode;
+        	ht_value->st_uid = owner;
+        	ht_value->st_gid = group;
+		leveldb_put(db, woptions, (char *)&addr, sizeof(ino_t), (char *)ht_value, sizeof(struct stat), &err);
+		if (err != NULL) {
+			VERBOSE(tracee, 2, "Meta DB write failed: %s", err);
+		}
+		leveldb_free(err); err = NULL;
+	}
+
+	return 0;
+}
+
+/*
+ * Deletes meta info based on path
+ */
+int delete_meta_info(char path[PATH_MAX]) {
+	int status;
+	char meta_path[PATH_MAX];
+	char* err = NULL;
+	Tracee *tracee = NULL;
+	struct stat statBuf;
+	ino_t addr;
+
+	status = stat(path, &statBuf);
+	addr = statBuf.st_ino;
+
+	if ((status == 0) && (addr > 0)) {
+		leveldb_delete(db, woptions, (char *)&addr, sizeof(ino_t), &err);
+		if (err != NULL) {
+			VERBOSE(tracee, 2, "Meta DB delete failed.");
+		}
+		leveldb_free(err); err = NULL;
+	}
+
+	status = get_meta_path(path, meta_path);
+	if(status < 0)
+		return 0;
+
+	/* If metafile exists, delete it */
+	if(path_exists(meta_path))
+		unlink(meta_path);
+
 	return 0;
 }
 

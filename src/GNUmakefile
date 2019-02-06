@@ -16,7 +16,7 @@ OBJDUMP  ?= $(CROSS_COMPILE)objdump
 
 CPPFLAGS += -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -I. -I$(VPATH)
 CFLAGS   += -Wall -Wextra -O2
-LDFLAGS  += -ltalloc -Wl,-z,noexecstack
+LDFLAGS  += -lleveldb -ltalloc -Wl,-z,noexecstack
 
 OBJECTS += \
 	cli/cli.o		\
@@ -66,8 +66,6 @@ OBJECTS += \
 	extension/fake_id0/utimensat.o \
 	extension/fake_id0/access.o \
 	extension/fake_id0/exec.o \
-	extension/fake_id0/link.o \
-	extension/fake_id0/symlink.o \
 	extension/fake_id0/mk.o \
 	extension/fake_id0/stat.o \
         extension/fake_id0/helper_functions.o \

@@ -80,7 +80,6 @@ int handle_stat_exit_end(Tracee *tracee, Config *config, word_t sysnum) {
 	mode_t mode;
 	struct stat my_stat;
 	char path[PATH_MAX];
-	char meta_path[PATH_MAX];
 	word_t result;
 
 	/* Override only if it succeed.  */
@@ -107,26 +106,20 @@ int handle_stat_exit_end(Tracee *tracee, Config *config, word_t sysnum) {
 	if(status == 1) 
 		goto fallback;
 
-	/** If the meta file exists, read the data from it and replace it the
+	/** If meta info exists, read the data from it and replace the
 	 *  relevant data in the stat structure.
 	 */
-	
-	status = get_meta_path(path, meta_path);
-	if(status == 0) {
-		status = path_exists(meta_path);
-		if(status == 0) {
-			read_meta_file(meta_path, &mode, &uid, &gid, config);
-
-			/** Get the file type and sticky/set-id bits of the original 
-			 *  file and add them to the mode found in the meta_file.
-			 */
-			read_data(tracee, &my_stat, peek_reg(tracee, ORIGINAL, sysarg), sizeof(struct stat));
-			my_stat.st_mode = (mode | ((my_stat.st_mode & S_IFMT) | (my_stat.st_mode & 07000)));
-			my_stat.st_uid = uid;
-			my_stat.st_gid = gid;
-			write_data(tracee, peek_reg(tracee, ORIGINAL, sysarg), &my_stat, sizeof(struct stat));
-			return 0;
-		}
+	status = read_meta_info(path, &mode, &uid, &gid, config);
+	if (status == 0) {
+		/** Get the file type and sticky/set-id bits of the original 
+		 *  file and add them to the mode from the meta info.
+		 */
+		read_data(tracee, &my_stat, peek_reg(tracee, ORIGINAL, sysarg), sizeof(struct stat));
+		my_stat.st_mode = (mode | ((my_stat.st_mode & S_IFMT) | (my_stat.st_mode & 07000)));
+		my_stat.st_uid = uid;
+		my_stat.st_gid = gid;
+		write_data(tracee, peek_reg(tracee, ORIGINAL, sysarg), &my_stat, sizeof(struct stat));
+		return 0;
 	}
 
 fallback:

@@ -26,8 +26,8 @@ int handle_chown_enter_end(Tracee *tracee, Config *config, Reg uid_sysarg, Reg g
 #endif /* ifndef USERLAND */
 
 #ifdef USERLAND
-/** Handles chown, lchown, fchown, and fchownat syscalls. Changes the meta file
- *  to reflect arguments sent to the syscall if the meta file exists. See
+/** Handles chown, lchown, fchown, and fchownat syscalls. Changes the meta info 
+ *  to reflect arguments sent to the syscall if the meta info exists. See
  *  chown(2) for returned permission errors.
  */
 int handle_chown_enter_end(Tracee *tracee, Reg path_sysarg, Reg owner_sysarg,
@@ -38,8 +38,6 @@ int handle_chown_enter_end(Tracee *tracee, Reg path_sysarg, Reg owner_sysarg,
 	uid_t owner, read_owner;
 	gid_t group, read_group;
 	char path[PATH_MAX];
-	char rel_path[PATH_MAX];
-	char meta_path[PATH_MAX];
 	
 	if(path_sysarg == IGNORE_SYSARG)
 		status = get_fd_path(tracee, path, fd_sysarg, CURRENT);
@@ -53,38 +51,23 @@ int handle_chown_enter_end(Tracee *tracee, Reg path_sysarg, Reg owner_sysarg,
 		return 0;
 	}
 
-	status = get_meta_path(path, meta_path);
-	if(status < 0)
-		return status;
-
-	if(path_exists(meta_path) != 0)
-		return 0;
-
-	status = get_fd_path(tracee, rel_path, dirfd_sysarg, CURRENT);
-	if(status < 0)
-		return status;
-
-	status = check_dir_perms(tracee, 'r', path, rel_path, config);
-	if(status < 0)
-		return status;
-
-	read_meta_file(meta_path, &mode, &read_owner, &read_group, config);
+	read_meta_info(path, &mode, &read_owner, &read_group, config);
 	owner = peek_reg(tracee, ORIGINAL, owner_sysarg);
 	/** When chown is called without an owner specified, eg 
 	 *  chown :1000 'file', the owner argument to the system call is implicitly
 	 *  set to -1. To avoid this, the owner argument is replaced with the owner
-	 *  according to the meta file if it exists, or the current euid.
+	 *  according to the meta info if it exists, or the current euid.
 	 */
 	if((int) owner == -1)
 		owner = read_owner;
 	group = peek_reg(tracee, ORIGINAL, group_sysarg);
 	if(config->euid == 0) 
-		write_meta_file(meta_path, mode, owner, group, 0, config);
+		write_meta_info(path, mode, owner, group, 0, config);
 
 	//TODO Handle chown properly: owner can only change the group of
 	//  a file to another group they belong to.
 	else if(config->euid == read_owner) {
-		write_meta_file(meta_path, mode, read_owner, group, 0, config);
+		write_meta_info(path, mode, read_owner, group, 0, config);
 		poke_reg(tracee, owner_sysarg, read_owner);	
 	}
 
