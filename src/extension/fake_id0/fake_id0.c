@@ -1233,6 +1233,7 @@ int fake_id0_callback(Extension *extension, ExtensionEvent event, intptr_t data1
 		case PR_setresgid32:
 		case PR_chroot:
 			status = handle_sigsys(tracee, config);
+			poke_reg(tracee, SYSARG_RESULT, (word_t)status);
 			if (status < 0)
 				return status;
 			break;

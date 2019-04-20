@@ -132,7 +132,8 @@ static int handle_seccomp_event_common(Tracee *tracee)
 	}
 	if (status == 1) {
 		VERBOSE(tracee, 4, "SIGSYS fully handled by an extension");
-		set_result_after_seccomp(tracee, 0);
+		//result must already be set
+		push_specific_regs(tracee, false);
 		return 0;
 	}
 
