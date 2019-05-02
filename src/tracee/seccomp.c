@@ -136,6 +136,10 @@ static int handle_seccomp_event_common(Tracee *tracee)
 		push_specific_regs(tracee, false);
 		return 0;
 	}
+	if (status == 2) {
+		VERBOSE(tracee, 4, "SIGSYS partially handled by an extension, restart the syscall with the changes");
+		restart_syscall_after_seccomp(tracee);
+	}
 
 	switch (sysnum) {
 	case PR_open:

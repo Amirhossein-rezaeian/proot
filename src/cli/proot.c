@@ -310,12 +310,6 @@ static int handle_option_H(Tracee *tracee, const Cli *cli UNUSED, const char *va
         return 0;
 }
 
-static int handle_option_shmem(Tracee *tracee, const Cli *cli UNUSED, const char *value UNUSED)
-{
-        (void) initialize_extension(tracee, shmem_callback, NULL);
-        return 0;
-}
-
 static int handle_option_p(Tracee *tracee, const Cli *cli UNUSED, const char *value UNUSED)
 {
         (void) initialize_extension(tracee, port_switch_callback, NULL);

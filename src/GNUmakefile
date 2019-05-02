@@ -70,14 +70,14 @@ OBJECTS += \
 	extension/fake_id0/symlink.o \
 	extension/fake_id0/mk.o \
 	extension/fake_id0/stat.o \
+	extension/fake_id0/shm.o \
         extension/fake_id0/helper_functions.o \
 	extension/fake_id0/fake_id0.o \
 	extension/hidden_files/hidden_files.o \
 	extension/port_switch/port_switch.o \
 	extension/link2symlink/link2symlink.o \
 	extension/fix_symlink_size/fix_symlink_size.o \
-	extension/fix_selinux_xattr/fix_selinux_xattr.o \
-	extension/shmem/shmem.o
+	extension/fix_selinux_xattr/fix_selinux_xattr.o
 
 define define_from_arch.h
 $2$1 := $(shell $(CC) $1 -E -dM -DNO_LIBC_HEADER $(SRC)/arch.h | grep -w $2 | cut -f 3 -d ' ')
