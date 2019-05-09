@@ -13,11 +13,11 @@
 # define shmid_ds shmid64_ds
 #endif
 
-extern int handle_shmget_sysenter_end(Tracee *tracee, RegVersion stage);
+extern int handle_shmget_sysexit_end(Tracee *tracee, RegVersion stage);
 extern int handle_shmat_sysenter_end(Tracee *tracee, RegVersion stage);
-extern int handle_shmat_sysexit_end(Tracee *tracee);
+extern int handle_shmat_sysexit_end(Tracee *tracee, RegVersion stage);
 extern int handle_shmdt_sysenter_end(Tracee *tracee, RegVersion stage);
 extern int handle_shmdt_sysexit_end(Tracee *tracee);
-extern int handle_shmctl_sysenter_end(Tracee *tracee, RegVersion stage);
+extern int handle_shmctl_sysexit_end(Tracee *tracee, Config *config, RegVersion stage);
 
 #endif /* FAKE_ID0_SHM_H */

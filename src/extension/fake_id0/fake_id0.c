@@ -53,6 +53,9 @@
 #include "extension/fake_id0/sendmsg.h"
 #include "extension/fake_id0/socket.h"
 #include "extension/fake_id0/stat.h"
+#include "extension/fake_id0/exec.h"
+#include "extension/fake_id0/shm.h"
+#include "extension/fake_id0/helper_functions.h"
 #ifdef USERLAND
 #include "extension/fake_id0/open.h"
 #include "extension/fake_id0/unlink.h"
@@ -60,12 +63,10 @@
 #include "extension/fake_id0/chmod.h"
 #include "extension/fake_id0/utimensat.h"
 #include "extension/fake_id0/access.h"
-#include "extension/fake_id0/exec.h"
 #include "extension/fake_id0/link.h"
 #include "extension/fake_id0/symlink.h"
 #include "extension/fake_id0/mk.h"
 #include "extension/fake_id0/stat.h"
-#include "extension/fake_id0/helper_functions.h"
 #endif
 
 /**
@@ -347,6 +348,10 @@ static FilteredSysnum filtered_sysnums[] = {
 	{ PR_stat64,		FILTER_SYSEXIT },
 	{ PR_statfs,		FILTER_SYSEXIT },
 	{ PR_statfs64,		FILTER_SYSEXIT },
+	{ PR_shmat,		FILTER_SYSEXIT },
+	{ PR_shmctl,		FILTER_SYSEXIT },
+	{ PR_shmdt,		FILTER_SYSEXIT },
+	{ PR_shmget,		FILTER_SYSEXIT },
 	FILTERED_SYSNUM_END,
 };
 
@@ -718,6 +723,19 @@ static int handle_sysenter_end(Tracee *tracee, Config *config)
 		set_sysnum(tracee, PR_void);
 		return 0;
 
+	/* int shmctl(int shmid, int cmd, struct shmid_ds *buf); */
+	case PR_shmctl:
+	/* int shmget(key_t key, size_t size, int shmflg); */
+	case PR_shmget:
+		set_sysnum(tracee, PR_void);
+		return 0;
+	/* void *shmat(int shmid, const void *shmaddr, int shmflg); */
+	case PR_shmat:
+		return handle_shmat_sysenter_end(tracee, ORIGINAL);
+	/* int shmdt(const void *shmaddr); */
+	case PR_shmdt:
+		return handle_shmdt_sysenter_end(tracee, ORIGINAL);
+
 	default:
 		return 0;
 	}
@@ -742,7 +760,9 @@ static int handle_sysexit_end(Tracee *tracee, Config *config)
 	Reg stat_sysarg = SYSARG_2;
 #endif
 
-	sysnum = get_sysnum(tracee, ORIGINAL);
+	RegVersion stage = (tracee->restore_original_regs_after_seccomp_event) ? ORIGINAL_SECCOMP_REWRITE : ORIGINAL;
+
+	sysnum = get_sysnum(tracee, stage);
 
 #ifdef USERLAND
 	if ((get_sysnum(tracee, CURRENT) == PR_fstat) || (get_sysnum(tracee, CURRENT) == PR_fstat64)) {
@@ -759,7 +779,7 @@ static int handle_sysexit_end(Tracee *tracee, Config *config)
 		/* Get the address of the 'stat' structure.  */
 		sysarg = SYSARG_2;
 		
-		address = peek_reg(tracee, ORIGINAL, sysarg);
+		address = peek_reg(tracee, stage, sysarg);
 		
 		/* Sanity checks.  */
 		assert(__builtin_types_compatible_p(uid_t, uint32_t));
@@ -800,13 +820,13 @@ static int handle_sysexit_end(Tracee *tracee, Config *config)
 		path[result] = '\0';
 
 		if ((strcmp(path + strlen(path) - strlen(" (deleted)"), " (deleted)") == 0) || (strncmp(path, "pipe", 4) == 0)) {
-			register_chained_syscall(tracee, sysnum, peek_reg(tracee, ORIGINAL, SYSARG_1), peek_reg(tracee, ORIGINAL, SYSARG_2), 0, 0, 0, 0);
+			register_chained_syscall(tracee, sysnum, peek_reg(tracee, stage, SYSARG_1), peek_reg(tracee, stage, SYSARG_2), 0, 0, 0, 0);
 		} else {
 			write_data(tracee, peek_reg(tracee, MODIFIED, SYSARG_3), path, sizeof(path));
 #		   if defined(__x86_64__)
-				register_chained_syscall(tracee, PR_newfstatat, AT_FDCWD, peek_reg(tracee, MODIFIED, SYSARG_3), peek_reg(tracee, ORIGINAL, SYSARG_2), 0, 0, 0);
+				register_chained_syscall(tracee, PR_newfstatat, AT_FDCWD, peek_reg(tracee, MODIFIED, SYSARG_3), peek_reg(tracee, stage, SYSARG_2), 0, 0, 0);
 #		   else
-				register_chained_syscall(tracee, PR_fstatat64, AT_FDCWD, peek_reg(tracee, MODIFIED, SYSARG_3), peek_reg(tracee, ORIGINAL, SYSARG_2), 0, 0, 0);
+				register_chained_syscall(tracee, PR_fstatat64, AT_FDCWD, peek_reg(tracee, MODIFIED, SYSARG_3), peek_reg(tracee, stage, SYSARG_2), 0, 0, 0);
 #		   endif
 		}
 
@@ -818,27 +838,27 @@ static int handle_sysexit_end(Tracee *tracee, Config *config)
 
 	case PR_setuid:
 	case PR_setuid32:
-		SETXID(uid, ORIGINAL);
+		SETXID(uid, stage);
 
 	case PR_setgid:
 	case PR_setgid32:
-		SETXID(gid, ORIGINAL);
+		SETXID(gid, stage);
 
 	case PR_setreuid:
 	case PR_setreuid32:
-		SETREXID(uid, ORIGINAL);
+		SETREXID(uid, stage);
 
 	case PR_setregid:
 	case PR_setregid32:
-		SETREXID(gid, ORIGINAL);
+		SETREXID(gid, stage);
 
 	case PR_setresuid:
 	case PR_setresuid32:
-		SETRESXID(u, ORIGINAL);
+		SETRESXID(u, stage);
 
 	case PR_setresgid:
 	case PR_setresgid32:
-		SETRESXID(g, ORIGINAL);
+		SETRESXID(g, stage);
 
 	case PR_setfsuid:
 	case PR_setfsuid32:
@@ -983,6 +1003,14 @@ static int handle_sysexit_end(Tracee *tracee, Config *config)
 		return 0;
 	}	
 #endif
+	case PR_shmat: 
+		return handle_shmat_sysexit_end(tracee, stage);
+	case PR_shmdt:
+		return handle_shmdt_sysexit_end(tracee);
+	case PR_shmctl:
+		return handle_shmctl_sysexit_end(tracee, config, stage);
+	case PR_shmget:
+		return handle_shmget_sysexit_end(tracee, stage);
 
 	default:
 		return 0;
@@ -992,37 +1020,43 @@ static int handle_sysexit_end(Tracee *tracee, Config *config)
 static int handle_sigsys(Tracee *tracee, Config *config)
 {
 	word_t sysnum;
+	int status;
 
 	sysnum = get_sysnum(tracee, CURRENT);
 	switch (sysnum) {
 
 	case PR_setuid:
 	case PR_setuid32:
-		SETXID(uid, CURRENT);
-
 	case PR_setgid:
 	case PR_setgid32:
-		SETXID(gid, CURRENT);
-
 	case PR_setreuid:
 	case PR_setreuid32:
-		SETREXID(uid, CURRENT);
-
 	case PR_setregid:
 	case PR_setregid32:
-		SETREXID(gid, CURRENT);
-
 	case PR_setresuid:
 	case PR_setresuid32:
-		SETRESXID(u, CURRENT);
-
 	case PR_setresgid:
 	case PR_setresgid32:
-		SETRESXID(g, CURRENT);
-
+	case PR_shmget:
+	case PR_shmctl:
+		/* These syscalls are fully emulated.  */
+		set_sysnum(tracee, PR_getuid);
+		return 2;
 	case PR_chroot:	
-		return handle_chroot_sigsys(tracee, config);
-
+		status = handle_chroot_sigsys(tracee, config);
+		if (status < 0)
+			return status;
+		return 1;
+	case PR_shmat:
+		status = handle_shmat_sysenter_end(tracee, CURRENT);
+		if (status < 0)
+			return status;
+		return 2;
+	case PR_shmdt:
+		status = handle_shmdt_sysenter_end(tracee, CURRENT);
+		if (status < 0)
+			return status;
+		return 2;
 	default:
 		return 0;
 	}
@@ -1201,9 +1235,7 @@ int fake_id0_callback(Extension *extension, ExtensionEvent event, intptr_t data1
 		return handle_sysenter_end(tracee, config);
 	}
 
-#ifdef USERLAND
 	case SYSCALL_CHAINED_EXIT:
-#endif
 	case SYSCALL_EXIT_END: {
 		Tracee *tracee = TRACEE(extension);
 		Config *config = talloc_get_type_abort(extension->config, Config);
@@ -1214,36 +1246,7 @@ int fake_id0_callback(Extension *extension, ExtensionEvent event, intptr_t data1
 	case SIGSYS_OCC: {
 		Tracee *tracee = TRACEE(extension);
 		Config *config = talloc_get_type_abort(extension->config, Config);
-		word_t sysnum = get_sysnum(tracee, CURRENT);
-		int status;
-
-		switch (sysnum) {
-
-		case PR_setuid:
-		case PR_setuid32:
-		case PR_setgid:
-		case PR_setgid32:
-		case PR_setreuid:
-		case PR_setreuid32:
-		case PR_setregid:
-		case PR_setregid32:
-		case PR_setresuid:
-		case PR_setresuid32:
-		case PR_setresgid:
-		case PR_setresgid32:
-		case PR_chroot:
-			status = handle_sigsys(tracee, config);
-			poke_reg(tracee, SYSARG_RESULT, (word_t)status);
-			if (status < 0)
-				return status;
-			break;
-
-		default:
-			return 0;
-		}
-
-		return 1; 
-
+		return handle_sigsys(tracee, config);
 	}
 
 	case TRANSLATED_PATH: {

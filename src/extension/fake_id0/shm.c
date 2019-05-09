@@ -1,10 +1,12 @@
-#include <android/log.h>
 #include <errno.h>
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 #include <paths.h>
 #include <linux/limits.h>
@@ -16,9 +18,11 @@
 #include "cli/note.h"
 #include "tracee/mem.h"
 #include "path/path.h"
+#include "syscall/chain.h"
 
 #include "extension/fake_id0/shm.h"
 
+#define ANDROID_SHMEM_SOCKNAME "/dev/shm/%08x"
 #define ROUND_UP(N, S) ((((N) + (S) - 1) / (S)) * (S))
 
 typedef struct {
@@ -32,6 +36,41 @@ typedef struct {
 
 static shmem_t* shmem = NULL;
 static size_t shmem_amount = 0;
+
+// The lower 16 bits of (getpid() + i), where i is a sequence number.
+// It is unique among processes as it's only set when bound.
+static int ashv_local_socket_id = 0;
+
+static pthread_t ashv_listening_thread_id = 0;
+
+static int ancil_send_fd(int sock, int fd)
+{
+	char nothing = '!';
+	struct iovec nothing_ptr = { .iov_base = &nothing, .iov_len = 1 };
+
+	struct {
+		struct cmsghdr align;
+		int fd[1];
+	} ancillary_data_buffer;
+
+	struct msghdr message_header = {
+		.msg_name = NULL,
+		.msg_namelen = 0,
+		.msg_iov = &nothing_ptr,
+		.msg_iovlen = 1,
+		.msg_flags = 0,
+		.msg_control = &ancillary_data_buffer,
+		.msg_controllen = sizeof(struct cmsghdr) + sizeof(int)
+	};
+
+	struct cmsghdr* cmsg = CMSG_FIRSTHDR(&message_header);
+	cmsg->cmsg_len = message_header.msg_controllen; // sizeof(int);
+	cmsg->cmsg_level = SOL_SOCKET;
+	cmsg->cmsg_type = SCM_RIGHTS;
+	((int*) CMSG_DATA(cmsg))[0] = fd;
+
+	return sendmsg(sock, &message_header, 0) >= 0 ? 0 : -1;
+}
 
 /*
  * From https://android.googlesource.com/platform/system/core/+/master/libcutils/ashmem-dev.c
@@ -102,13 +141,85 @@ static int ashv_find_addr(void *addr)
 	return -1;
 }
 
+static void* ashv_thread_function(void* arg)
+{
+	int sock = *(int*)arg;
+	free(arg);
+	struct sockaddr_un addr;
+	socklen_t len = sizeof(addr);
+	int sendsock;
+	Tracee *tracee = NULL;
+	//VERBOSE(tracee, 4, "%s: thread started", __PRETTY_FUNCTION__);
+	while ((sendsock = accept(sock, (struct sockaddr *)&addr, &len)) != -1) {
+		int shmid;
+		if (recv(sendsock, &shmid, sizeof(shmid), 0) != sizeof(shmid)) {
+			VERBOSE(tracee, 4, "%s: ERROR: recv() returned not %zu bytes", __PRETTY_FUNCTION__, sizeof(shmid));
+			close(sendsock);
+			continue;
+		}
+		int idx = ashv_find_index(shmid);
+		if (idx != -1) {
+			if (write(sendsock, &shmem[idx].key, sizeof(key_t)) != sizeof(key_t)) {
+				VERBOSE(tracee, 4, "%s: ERROR: write failed: %s", __PRETTY_FUNCTION__, strerror(errno));
+			}
+			if (ancil_send_fd(sendsock, shmem[idx].descriptor) != 0) {
+				VERBOSE(tracee, 4, "%s: ERROR: ancil_send_fd() failed: %s", __PRETTY_FUNCTION__, strerror(errno));
+			}
+		} else {
+			VERBOSE(tracee, 4, "%s: ERROR: cannot find shmid 0x%x", __PRETTY_FUNCTION__, shmid);
+		}
+		close(sendsock);
+		len = sizeof(addr);
+	}
+	VERBOSE(tracee, 4, "%s: ERROR: listen() failed, thread stopped", __PRETTY_FUNCTION__);
+	return NULL;
+}
+
 /* Get shared memory area identifier. */
-int handle_shmget_sysenter_end(Tracee *tracee, RegVersion stage)
+int handle_shmget_sysexit_end(Tracee *tracee, RegVersion stage)
 {
 	static size_t shmem_counter = 0;
 	int shmid = -1;
 	key_t key = (key_t)peek_reg(tracee, stage, SYSARG_1);
 	size_t size = (size_t)peek_reg(tracee, stage, SYSARG_2);
+
+	VERBOSE(tracee, 4, "%s: Emulating shmget", __PRETTY_FUNCTION__);
+
+	if (!ashv_listening_thread_id) {
+		int sock = socket(AF_UNIX, SOCK_STREAM, 0);
+		if (!sock) {
+			VERBOSE(tracee, 4, "%s: cannot create UNIX socket: %s", __PRETTY_FUNCTION__, strerror(errno));
+			errno = EINVAL;
+			return -1;
+		}
+		int i;
+		for (i = 0; i < 4096; i++) {
+			struct sockaddr_un addr;
+			int len;
+			memset (&addr, 0, sizeof(addr));
+			addr.sun_family = AF_UNIX;
+			ashv_local_socket_id = (getpid() + i) & 0xffff;
+			sprintf(&addr.sun_path[1], ANDROID_SHMEM_SOCKNAME, ashv_local_socket_id);
+			len = sizeof(addr.sun_family) + strlen(&addr.sun_path[1]) + 1;
+			if (bind(sock, (struct sockaddr *)&addr, len) != 0) continue;
+			VERBOSE(tracee, 4, "%s: bound UNIX socket %s in pid=%d", __PRETTY_FUNCTION__, addr.sun_path + 1, getpid());
+			break;
+		}
+		if (i == 4096) {
+			VERBOSE(tracee, 4, "%s: cannot bind UNIX socket, bailing out", __PRETTY_FUNCTION__);
+			ashv_local_socket_id = 0;
+			errno = ENOMEM;
+			return -1;
+		}
+		if (listen(sock, 4) != 0) {
+			VERBOSE(tracee, 4, "%s: listen failed", __PRETTY_FUNCTION__);
+			errno = ENOMEM;
+			return -1;
+		}
+		int* socket_arg = malloc(sizeof(int));
+		*socket_arg = sock;
+		pthread_create(&ashv_listening_thread_id, NULL, &ashv_thread_function, socket_arg);
+	}
 
 	if (key != IPC_PRIVATE) {
 		int key_idx = ashv_find_key(key);
@@ -120,7 +231,7 @@ int handle_shmget_sysenter_end(Tracee *tracee, RegVersion stage)
 
 	int idx = shmem_amount;
 	char buf[256];
-	sprintf(buf, "proot-%d", idx);
+	sprintf(buf, ANDROID_SHMEM_SOCKNAME "-%d", ashv_local_socket_id, idx);
 
 	shmem_amount++;
 	if (shmid == -1) {
@@ -143,6 +254,8 @@ int handle_shmget_sysenter_end(Tracee *tracee, RegVersion stage)
 		shmem = realloc(shmem, shmem_amount * sizeof(shmem_t));
 		poke_reg(tracee, SYSARG_RESULT, (word_t)-1);
 		return 0;
+	} else {
+		VERBOSE(tracee, 4, "%s: ashmem_create_region() worked. shmem[%d].descriptor = %d", __PRETTY_FUNCTION__, idx, shmem[idx].descriptor);
 	}
 
 	poke_reg(tracee, SYSARG_RESULT, (word_t)shmid);
@@ -153,65 +266,158 @@ int handle_shmget_sysenter_end(Tracee *tracee, RegVersion stage)
 int handle_shmat_sysenter_end(Tracee *tracee, RegVersion stage)
 {
 	int shmid = (int)peek_reg(tracee, stage, SYSARG_1);
-	void *shmaddr = (void *)peek_reg(tracee, stage, SYSARG_2);
-	int shmflg = (int)peek_reg(tracee, stage, SYSARG_3);
 	int idx = ashv_find_index(shmid);
 	if (idx == -1) {
 		VERBOSE(tracee, 4, "%s: shmid %x does not exist", __PRETTY_FUNCTION__, shmid);
 		return -EINVAL;
 	}
-	if (shmem[idx].addr == NULL) {
-		set_sysnum(tracee, PR_mmap);
-		poke_reg(tracee, SYSARG_1, (word_t)shmaddr);
-		poke_reg(tracee, SYSARG_2, (word_t)shmem[idx].size);
-		poke_reg(tracee, SYSARG_3, (word_t)(PROT_READ | (shmflg == 0 ? PROT_WRITE : 0)));
-		poke_reg(tracee, SYSARG_4, (word_t)MAP_SHARED);
-		poke_reg(tracee, SYSARG_5, (word_t)shmem[idx].descriptor);
-		poke_reg(tracee, SYSARG_6, (word_t)0);
-	} else {
-		set_sysnum(tracee, PR_getuid);
-	}
+
+	//CCX should we check if this is already mapped
+	set_sysnum(tracee, PR_socket);
+	poke_reg(tracee, SYSARG_1, AF_UNIX);
+	poke_reg(tracee, SYSARG_2, SOCK_STREAM);
+	poke_reg(tracee, SYSARG_3, 0);
+
+	//Allocate memory we are going to need later
+	tracee->word_store[0] = alloc_mem(tracee, sizeof(struct sockaddr_un));
+	tracee->word_store[1] = alloc_mem(tracee, sizeof(int));
+	tracee->word_store[2] = alloc_mem(tracee, sizeof(key_t));
+	tracee->word_store[3] = alloc_mem(tracee, 1);
+	tracee->word_store[4] = alloc_mem(tracee, sizeof(struct iovec));
+	struct {
+		struct cmsghdr align;
+		int fd[1];
+	} ancillary_data_buffer;
+	tracee->word_store[5] = alloc_mem(tracee, sizeof(ancillary_data_buffer));
+	tracee->word_store[6] = alloc_mem(tracee, sizeof(struct msghdr));
 
 	return 0;
 }
 
 /* Attach shared memory segment. */
-int handle_shmat_sysexit_end(Tracee *tracee)
+int handle_shmat_sysexit_end(Tracee *tracee, RegVersion stage)
 {
 	word_t sysnum;
 	word_t result;
-	int fd;
-	int idx; 
-	void *addr;
 	int shmid;
 
 	sysnum = get_sysnum(tracee, CURRENT);
 	switch (sysnum) {
-	case PR_mmap:
-		fd = (int)peek_reg(tracee, MODIFIED, SYSARG_5);
-		idx = ashv_find_descriptor(fd);
-		if (idx == -1) {
-			VERBOSE(tracee, 4, "%s: fd %d does not exist", __PRETTY_FUNCTION__, fd);
-			return -EINVAL;
-		}
+	case PR_socket:
 		result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
 		if ((int)result < 0) {
-			VERBOSE(tracee, 4, "%s: mmap() failed for ID %x FD %d: %s", __PRETTY_FUNCTION__, idx, fd, strerror(-1*(int)result));
-			shmem[idx].addr = NULL;
-		} else {
-			shmem[idx].addr = (void*)result;
+			VERBOSE(tracee, 4, "%s: cannot create UNIX socket", __PRETTY_FUNCTION__);
+			return -EINVAL;
 		}
-		break;
-	case PR_getuid:
-		shmid = (int)peek_reg(tracee, MODIFIED, SYSARG_1);
-		idx = ashv_find_index(shmid);
+		struct sockaddr_un sockaddr;
+		memset(&sockaddr, 0, sizeof(sockaddr));
+		sockaddr.sun_family = AF_UNIX;
+		sprintf(&sockaddr.sun_path[1], ANDROID_SHMEM_SOCKNAME, ashv_local_socket_id);
+		int addrlen = sizeof(sockaddr.sun_family) + strlen(&sockaddr.sun_path[1]) + 1;
+		write_data(tracee, tracee->word_store[0], &sockaddr, sizeof(struct sockaddr_un));
+		tracee->word_store[8] = result;
+		tracee->word_store[9] = (word_t)-1;
+		register_chained_syscall(tracee, PR_connect, result, tracee->word_store[0], addrlen, 0, 0, 0);
+		return 0;
+	case PR_connect:
+		result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
+		if ((int)result != 0) {
+			VERBOSE(tracee, 4, "%s: Cannot connect to UNIX socket", __PRETTY_FUNCTION__);
+			return -EINVAL;
+		}
+		shmid = (int)peek_reg(tracee, stage, SYSARG_1);
+		write_data(tracee, tracee->word_store[1], &shmid, sizeof(int));
+		register_chained_syscall(tracee, PR_sendto, tracee->word_store[8], tracee->word_store[1], sizeof(int), 0, 0, 0);
+		return 0;
+	case PR_sendto:
+		result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
+		if ((int)result != sizeof(shmid)) {
+			VERBOSE(tracee, 4, "%s: send() failed on socket", __PRETTY_FUNCTION__);
+			register_chained_syscall(tracee, PR_close, tracee->word_store[8], 0, 0, 0, 0, 0);
+			return 0;
+		}
+		register_chained_syscall(tracee, PR_read, tracee->word_store[8], tracee->word_store[2], sizeof(key_t), 0, 0, 0);
+		return 0;
+	case PR_read:
+		result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
+		if ((int)result != sizeof(key_t)) {
+			VERBOSE(tracee, 4, "%s: read() failed on socket", __PRETTY_FUNCTION__);
+			register_chained_syscall(tracee, PR_close, tracee->word_store[8], 0, 0, 0, 0, 0);
+			return 0;
+		}
+
+		char nothing = '!';
+		write_data(tracee, tracee->word_store[3], &nothing, 1);
+		struct iovec nothing_ptr = { .iov_base = (void *)tracee->word_store[3], .iov_len = 1 };
+		write_data(tracee, tracee->word_store[4], &nothing_ptr, sizeof(nothing_ptr));
+
+		struct {
+			struct cmsghdr align;
+			int fd[1];
+		} ancillary_data_buffer;
+		ancillary_data_buffer.fd[0] = -1;
+		write_data(tracee, tracee->word_store[5], &ancillary_data_buffer, sizeof(ancillary_data_buffer));
+
+		struct msghdr message_header = {
+			.msg_name = NULL,
+			.msg_namelen = 0,
+			.msg_iov = (struct iovec *)tracee->word_store[4],
+			.msg_iovlen = 1,
+			.msg_flags = 0,
+			.msg_control = (void *)tracee->word_store[5],
+			.msg_controllen = sizeof(struct cmsghdr) + sizeof(int)
+		};
+		write_data(tracee, tracee->word_store[6], &message_header, sizeof(struct msghdr));
+
+		register_chained_syscall(tracee, PR_recvmsg, tracee->word_store[8], tracee->word_store[6], 0, 0, 0, 0);
+		return 0;
+	case PR_recvmsg:
+		result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
+		if ((int)result < 0) {
+			VERBOSE(tracee, 4, "%s: recvmesg() failed on socket", __PRETTY_FUNCTION__);
+			register_chained_syscall(tracee, PR_close, tracee->word_store[8], 0, 0, 0, 0, 0);
+			return 0;
+		}
+
+		struct msghdr message_header_2;
+		read_data(tracee, &message_header_2, tracee->word_store[6], sizeof(struct msghdr));
+
+		struct {
+			struct cmsghdr align;
+			int fd[1];
+		} ancillary_data_buffer_2;
+		read_data(tracee, &ancillary_data_buffer_2, (word_t)message_header_2.msg_control, sizeof(ancillary_data_buffer_2));
+
+		tracee->word_store[9] = ancillary_data_buffer_2.fd[0];
+		register_chained_syscall(tracee, PR_close, tracee->word_store[8], 0, 0, 0, 0, 0);
+		return 0;
+	case PR_close:
+		if ((int)tracee->word_store[9] == -1)
+			return -EINVAL;
+
+		int shmid = (int)peek_reg(tracee, stage, SYSARG_1);
+		void *shmaddr = (void *)peek_reg(tracee, stage, SYSARG_2);
+		int shmflg = (int)peek_reg(tracee, stage, SYSARG_3);
+		int idx = ashv_find_index(shmid);
+		if (idx == -1) {
+			VERBOSE(tracee, 4, "%s: shmid %x does not exist", __PRETTY_FUNCTION__, shmid);
+			return -EINVAL;
+		}
+
+		//CCX to we need to check if this has already been mapped? - old code did this, but i don't have a per process table, maybe i should
+		register_chained_syscall(tracee, PR_mmap, (word_t)shmaddr, (word_t)shmem[idx].size, (word_t)(PROT_READ | (shmflg == 0 ? PROT_WRITE : 0)), (word_t)MAP_SHARED, tracee->word_store[9], 0);
+		return 0;
+	case PR_mmap:
+		result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
+		if ((int)result < 0) {
+			VERBOSE(tracee, 4, "%s: mmap() failed", __PRETTY_FUNCTION__);
+			return -EINVAL;
+		}
+
+		return 0;
 	default:
 		return 0;
 	}
-
-	addr = shmem[idx].addr;
-	VERBOSE(tracee, 4, "%s: mapped addr %p for FD %d ID %d", __PRETTY_FUNCTION__, addr, shmem[idx].descriptor, idx);
-	poke_reg(tracee, SYSARG_RESULT, (word_t)(addr ? addr : (void *)-1));
 
 	return 0;
 }
@@ -272,7 +478,7 @@ int handle_shmdt_sysexit_end(Tracee *tracee)
 }
 
 /* Shared memory control operation. */
-int handle_shmctl_sysenter_end(Tracee *tracee, RegVersion stage)
+int handle_shmctl_sysexit_end(Tracee *tracee, Config *config, RegVersion stage)
 {
 	int shmid = (int)peek_reg(tracee, stage, SYSARG_1);
 	int cmd = (int)peek_reg(tracee, stage, SYSARG_2);
@@ -315,11 +521,10 @@ int handle_shmctl_sysenter_end(Tracee *tracee, RegVersion stage)
 		lcl_buf.shm_segsz = shmem[idx].size;
 		lcl_buf.shm_nattch = 1;
 		lcl_buf.shm_perm.key = shmem[idx].key;
-		//CCX need to get these from prooted process
-		lcl_buf.shm_perm.uid = geteuid();
-		lcl_buf.shm_perm.gid = getegid();
-		lcl_buf.shm_perm.cuid = geteuid();
-		lcl_buf.shm_perm.cgid = getegid();
+		lcl_buf.shm_perm.uid = config->euid;
+		lcl_buf.shm_perm.gid = config->egid;
+		lcl_buf.shm_perm.cuid = config->euid;
+		lcl_buf.shm_perm.cgid = config->egid;
 		lcl_buf.shm_perm.mode = 0666;
 		lcl_buf.shm_perm.seq = 1;
 		write_data(tracee, peek_reg(tracee, stage, SYSARG_3), &lcl_buf, sizeof(struct shmid_ds));
@@ -330,116 +535,4 @@ int handle_shmctl_sysenter_end(Tracee *tracee, RegVersion stage)
 
 	VERBOSE(tracee, 4, "%s: cmd %d not implemented yet!", __PRETTY_FUNCTION__, cmd);
 	return -EINVAL;
-}
-
-/* Just turn shared memory system calls into something harmless.
- * We will hande them on exit */
-static int handle_sysenter_end(Tracee *tracee, RegVersion stage)
-{
-	word_t sysnum;
-
-	sysnum = get_sysnum(tracee, ORIGINAL);
-	switch (sysnum) {
-
-	/* void *shmat(int shmid, const void *shmaddr, int shmflg); */
-	case PR_shmat:
-		return handle_shmat_sysenter_end(tracee, stage);
-	/* int shmctl(int shmid, int cmd, struct shmid_ds *buf); */
-	case PR_shmctl:
-		return handle_shmctl_sysenter_end(tracee, stage);
-	/* int shmdt(const void *shmaddr); */
-	case PR_shmdt:
-		return handle_shmdt_sysenter_end(tracee, stage);
-	/* int shmget(key_t key, size_t size, int shmflg); */
-	case PR_shmget:
-		return handle_shmget_sysenter_end(tracee, stage);
-	default:
-		return 0;
-	}
-
-	return 0;
-}
-
-/* Just turn shared memory system calls into something harmless.
- * We will hande them on exit */
-static int handle_sysexit_end(Tracee *tracee)
-{
-	word_t sysnum;
-
-	sysnum = get_sysnum(tracee, ORIGINAL);
-	switch (sysnum) {
-
-	case PR_shmat: 
-		return handle_shmat_sysexit_end(tracee);
-	case PR_shmdt:
-		return handle_shmdt_sysexit_end(tracee);
-	case PR_shmctl:
-	case PR_shmget:
-		poke_reg(tracee, SYSARG_RESULT, (word_t)0);
-		return 0;
-	default:
-		return 0;
-	}
-
-	return 0;
-}
-
-/**
- * Handler for this @extension.  It is triggered each time an @event
- * occured.  See ExtensionEvent for the meaning of @data1 and @data2.
- */
-int shmem_callback(Extension *extension, ExtensionEvent event,
-	intptr_t data1 UNUSED, intptr_t data2 UNUSED)
-{
-	switch (event) {
-	case INITIALIZATION: {
-	/* List of syscalls handled by this extension */
-		static FilteredSysnum filtered_sysnums[] = {
-			{ PR_shmat, FILTER_SYSEXIT },
-			{ PR_shmctl, FILTER_SYSEXIT },
-			{ PR_shmdt, FILTER_SYSEXIT },
-			{ PR_shmget, FILTER_SYSEXIT },
-			FILTERED_SYSNUM_END,
-		};
-		extension->filtered_sysnums = filtered_sysnums;
-		return 0;
-	}
-
-	case SYSCALL_ENTER_END: {
-		return handle_sysenter_end(TRACEE(extension), ORIGINAL);
-	}
-
-	case SYSCALL_EXIT_END: {
-		return handle_sysexit_end(TRACEE(extension));
-	}
-
-	case SIGSYS_OCC: {
-		int status;
-		word_t sysnum;
-
-		sysnum = get_sysnum(TRACEE(extension), CURRENT);
-		switch (sysnum) {
-
-		case PR_shmat:
-		case PR_shmdt:
-			status = handle_sysenter_end(TRACEE(extension), CURRENT);
-			if (status < 0)
-				return status;
-			return 2;
-		case PR_shmctl:
-		case PR_shmget:
-			status = handle_sysenter_end(TRACEE(extension), CURRENT);
-			if (status < 0)
-				return status;
-			return 1;
-		default:
-			return 0;
-		}
-
-		return 0;
-	}
-	default:
-		return 0;
-
-	}
 }
