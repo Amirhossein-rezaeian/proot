@@ -405,9 +405,13 @@ int handle_shmat_sysexit_end(Tracee *tracee, RegVersion stage)
 		}
 
 		//CCX to we need to check if this has already been mapped? - old code did this, but i don't have a per process table, maybe i should
-		register_chained_syscall(tracee, PR_mmap, (word_t)shmaddr, (word_t)shmem[idx].size, (word_t)(PROT_READ | (shmflg == 0 ? PROT_WRITE : 0)), (word_t)MAP_SHARED, tracee->word_store[9], 0);
+		word_t mmap_sysnum = detranslate_sysnum(get_abi(tracee), PR_mmap2) != SYSCALL_AVOIDER
+                        ? PR_mmap2
+                        : PR_mmap;
+		register_chained_syscall(tracee, mmap_sysnum, (word_t)shmaddr, (word_t)shmem[idx].size, (word_t)(PROT_READ | (shmflg == 0 ? PROT_WRITE : 0)), (word_t)MAP_SHARED, tracee->word_store[9], 0);
 		return 0;
 	case PR_mmap:
+	case PR_mmap2:
 		result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
 		if ((int)result < 0) {
 			VERBOSE(tracee, 4, "%s: mmap() failed", __PRETTY_FUNCTION__);

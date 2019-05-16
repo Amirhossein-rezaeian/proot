@@ -973,7 +973,7 @@ static int handle_sysexit_end(Tracee *tracee, Config *config)
 #endif /* ifdef USERLAND */
 
 	case PR_chroot: 
-		return handle_chroot_exit_end(tracee, config);
+		return handle_chroot_exit_end(tracee, config, false);
 
 	case PR_getsockopt:
 		return handle_getsockopt_exit_end(tracee);
@@ -1065,7 +1065,7 @@ static int handle_sigsys(Tracee *tracee, Config *config)
 		set_sysnum(tracee, PR_getuid);
 		return 2;
 	case PR_chroot:	
-		status = handle_chroot_sigsys(tracee, config);
+		status = handle_chroot_exit_end(tracee, config, true);
 		if (status < 0)
 			return status;
 		return 1;
