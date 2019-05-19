@@ -232,7 +232,7 @@
 		config->s ## type ## id = s ## type ## id;		\
 									\
 	poke_reg(tracee, SYSARG_RESULT, 0);				\
-	return 0;
+	return 0;							\
 } while (0)
 
 /**
