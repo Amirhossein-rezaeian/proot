@@ -27,9 +27,10 @@
 
 typedef struct {
 	int id;
-	void *addr;
+	void **addr;
 	int descriptor;
 	size_t size;
+	int nattach;
 	bool markedForDeletion;
 	key_t key;
 } shmem_t;
@@ -125,20 +126,30 @@ static int ashv_find_key(key_t key)
 	return -1;
 }
 
-static int ashv_find_descriptor(int descriptor)
-{
-	for (size_t i = 0; i < shmem_amount; i++)
-		if (shmem[i].descriptor == descriptor)
-			return i;
-	return -1;
-}
-
 static int ashv_find_addr(void *addr)
 {
 	for (size_t i = 0; i < shmem_amount; i++)
-		if (shmem[i].addr == addr)
-			return i;
+		for (int j = 0; j < shmem[i].nattach; j++)
+			if (shmem[i].addr[j] == addr)
+				return i;
 	return -1;
+}
+
+static void android_shmem_addr_attach(int idx, void *addr)
+{
+	shmem[idx].nattach++;
+	shmem[idx].addr = realloc(shmem[idx].addr, shmem[idx].nattach * sizeof(void *));
+	shmem[idx].addr[shmem[idx].nattach-1] = addr;
+}
+
+static void android_shmem_addr_detach(int idx, void *addr)
+{
+	for (int i = 0; i < shmem[idx].nattach; i++)
+		if (shmem[idx].addr[i] == addr) {
+			shmem[idx].nattach--;
+			memmove(&(shmem[idx].addr[i]), &(shmem[idx].addr[i+1]), (shmem[idx].nattach - i) * sizeof(void *));
+			return;
+		}
 }
 
 static void* ashv_thread_function(void* arg)
@@ -149,7 +160,6 @@ static void* ashv_thread_function(void* arg)
 	socklen_t len = sizeof(addr);
 	int sendsock;
 	Tracee *tracee = NULL;
-	//VERBOSE(tracee, 4, "%s: thread started", __PRETTY_FUNCTION__);
 	while ((sendsock = accept(sock, (struct sockaddr *)&addr, &len)) != -1) {
 		int shmid;
 		if (recv(sendsock, &shmid, sizeof(shmid), 0) != sizeof(shmid)) {
@@ -245,6 +255,7 @@ int handle_shmget_sysexit_end(Tracee *tracee, RegVersion stage)
 	shmem[idx].descriptor = ashmem_create_region(buf, size);
 	shmem[idx].addr = NULL;
 	shmem[idx].id = shmid;
+	shmem[idx].nattach = 0;
 	shmem[idx].markedForDeletion = false;
 	shmem[idx].key = key;
 
@@ -272,7 +283,6 @@ int handle_shmat_sysenter_end(Tracee *tracee, RegVersion stage)
 		return -EINVAL;
 	}
 
-	//CCX should we check if this is already mapped
 	set_sysnum(tracee, PR_socket);
 	poke_reg(tracee, SYSARG_1, AF_UNIX);
 	poke_reg(tracee, SYSARG_2, SOCK_STREAM);
@@ -391,7 +401,7 @@ int handle_shmat_sysexit_end(Tracee *tracee, RegVersion stage)
 		tracee->word_store[9] = ancillary_data_buffer_2.fd[0];
 		register_chained_syscall(tracee, PR_close, tracee->word_store[8], 0, 0, 0, 0, 0);
 		return 0;
-	case PR_close:
+	case PR_close: {
 		if ((int)tracee->word_store[9] == -1)
 			return -EINVAL;
 
@@ -404,21 +414,30 @@ int handle_shmat_sysexit_end(Tracee *tracee, RegVersion stage)
 			return -EINVAL;
 		}
 
-		//CCX to we need to check if this has already been mapped? - old code did this, but i don't have a per process table, maybe i should
 		word_t mmap_sysnum = detranslate_sysnum(get_abi(tracee), PR_mmap2) != SYSCALL_AVOIDER
                         ? PR_mmap2
                         : PR_mmap;
 		register_chained_syscall(tracee, mmap_sysnum, (word_t)shmaddr, (word_t)shmem[idx].size, (word_t)(PROT_READ | (shmflg == 0 ? PROT_WRITE : 0)), (word_t)MAP_SHARED, tracee->word_store[9], 0);
 		return 0;
+	}
 	case PR_mmap:
-	case PR_mmap2:
+	case PR_mmap2: {
 		result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
-		if ((int)result < 0) {
+		if ((void *)result == MAP_FAILED) {
 			VERBOSE(tracee, 4, "%s: mmap() failed", __PRETTY_FUNCTION__);
 			return -EINVAL;
 		}
 
+		int shmid = (int)peek_reg(tracee, stage, SYSARG_1);
+		int idx = ashv_find_index(shmid);
+		if (idx == -1) {
+			VERBOSE(tracee, 4, "%s: shmid %x does not exist", __PRETTY_FUNCTION__, shmid);
+			return -EINVAL;
+		}
+		android_shmem_addr_attach(idx, (void *)result);
+		VERBOSE(tracee, 4, "%s: shmid %x, nattach %d", __PRETTY_FUNCTION__, shmid, shmem[idx].nattach);
 		return 0;
+	}
 	default:
 		return 0;
 	}
@@ -437,7 +456,6 @@ int handle_shmdt_sysenter_end(Tracee *tracee, RegVersion stage)
 		set_sysnum(tracee, PR_getuid);
 	} else {
 		set_sysnum(tracee, PR_munmap);
-		poke_reg(tracee, SYSARG_1, (word_t)shmem[idx].addr);
 		poke_reg(tracee, SYSARG_2, (word_t)shmem[idx].size);
 	}
 
@@ -471,9 +489,10 @@ int handle_shmdt_sysexit_end(Tracee *tracee)
 		VERBOSE(tracee, 4, "%s: munmap %p failed", __PRETTY_FUNCTION__, shmaddr);
 		poke_reg(tracee, SYSARG_RESULT, (word_t)0);
 	}
-	shmem[idx].addr = NULL;
+	android_shmem_addr_detach(idx, shmaddr);
 	VERBOSE(tracee, 4, "%s: unmapped addr %p for FD %d ID %x shmid %x", __PRETTY_FUNCTION__, shmaddr, shmem[idx].descriptor, idx, shmem[idx].id);
-	if (shmem[idx].markedForDeletion) {
+	VERBOSE(tracee, 4, "%s: shmid %x, nattach %d", __PRETTY_FUNCTION__, shmem[idx].id, shmem[idx].nattach);
+	if (shmem[idx].markedForDeletion && (shmem[idx].nattach == 0)) {
 		VERBOSE(tracee, 4, "%s: deleting shmid %x", __PRETTY_FUNCTION__, shmem[idx].id);
 		android_shmem_delete(idx);
 	}
@@ -499,7 +518,7 @@ int handle_shmctl_sysexit_end(Tracee *tracee, Config *config, RegVersion stage)
 			return 0;
 		}
 
-		if (shmem[idx].addr) {
+		if (shmem[idx].nattach != 0) {
 			// shmctl(2): The segment will actually be destroyed only
 			// after the last process detaches it (i.e., when the shm_nattch
 			// member of the associated structure shmid_ds is zero.
@@ -523,7 +542,7 @@ int handle_shmctl_sysexit_end(Tracee *tracee, Config *config, RegVersion stage)
 		/* Report max permissive mode */
 		memset(&lcl_buf, 0, sizeof(struct shmid_ds));
 		lcl_buf.shm_segsz = shmem[idx].size;
-		lcl_buf.shm_nattch = 1;
+		lcl_buf.shm_nattch = shmem[idx].nattach;
 		lcl_buf.shm_perm.key = shmem[idx].key;
 		lcl_buf.shm_perm.uid = config->euid;
 		lcl_buf.shm_perm.gid = config->egid;
