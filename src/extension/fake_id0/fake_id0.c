@@ -56,6 +56,7 @@
 #include "extension/fake_id0/exec.h"
 #include "extension/fake_id0/shm.h"
 #include "extension/fake_id0/sem.h"
+#include "extension/fake_id0/prctl.h"
 #include "extension/fake_id0/helper_functions.h"
 #ifdef USERLAND
 #include "extension/fake_id0/open.h"
@@ -356,6 +357,7 @@ static FilteredSysnum filtered_sysnums[] = {
 	{ PR_semget,		FILTER_SYSEXIT },
 	{ PR_semctl,		FILTER_SYSEXIT },
 	{ PR_semop,		FILTER_SYSEXIT },
+	{ PR_prctl,		FILTER_SYSEXIT },
 	FILTERED_SYSNUM_END,
 };
 
@@ -748,6 +750,9 @@ static int handle_sysenter_end(Tracee *tracee, Config *config)
 	case PR_semop:
 		set_sysnum(tracee, PR_void);
 		return 0;
+	
+	case PR_prctl:
+		return handle_prctl_sysenter_end(tracee);
 
 	default:
 		return 0;
@@ -1030,6 +1035,8 @@ static int handle_sysexit_end(Tracee *tracee, Config *config)
 		return handle_semctl_sysexit_end(tracee, stage);
 	case PR_semop:
 		return handle_semop_sysexit_end(tracee, stage);
+	case PR_prctl:
+		return handle_prctl_sysexit_end(tracee);
 
 	default:
 		return 0;

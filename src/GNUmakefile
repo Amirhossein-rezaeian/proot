@@ -72,6 +72,7 @@ OBJECTS += \
 	extension/fake_id0/stat.o \
 	extension/fake_id0/shm.o \
 	extension/fake_id0/sem.o \
+	extension/fake_id0/prctl.o \
         extension/fake_id0/helper_functions.o \
 	extension/fake_id0/fake_id0.o \
 	extension/hidden_files/hidden_files.o \
