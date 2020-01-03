@@ -389,12 +389,19 @@ static int handle_seccomp_event_common(Tracee *tracee)
 
 	//required for when an extention changes the sysnum to PR_void and that gets picked up by the filtering
 	case PR_void:
-		set_result_after_seccomp(tracee, 0);
-		break;
+		if (peek_reg(tracee, CURRENT, SYSARG_NUM) == SYSCALL_AVOIDER) {
+			VERBOSE(tracee, 9, "SIGSYS PR_void handled, and 0 returned");
+			set_result_after_seccomp(tracee, 0);
+			break;
+		}
+
+		VERBOSE(tracee, 9, "SIGSYS PR_void handled, but not for SYSCALL_AVOIDER. Falling through to default handling");
+		/* fall-through */
 
 	case PR_set_robust_list:
 	default:
 		/* Set errno to -ENOSYS */
+		VERBOSE(tracee, 9, "SIGSYS. Return set to -ENOSYS");
 		set_result_after_seccomp(tracee, -ENOSYS);
 	}
 
