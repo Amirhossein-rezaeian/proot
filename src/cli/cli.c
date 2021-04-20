@@ -31,7 +31,7 @@
 #include <unistd.h>        /* getpid(2),  */
 #include <errno.h>         /* errno(3), */
 #include <libgen.h>        /* basename(3), */
-#ifndef __ANDROID__
+#ifdef __GLIBC__
 #include <execinfo.h>      /* backtrace_symbols(3), */
 #endif
 #include <limits.h>        /* INT_MAX, */
@@ -44,6 +44,8 @@
 #include "path/binding.h"
 #include "path/canon.h"
 #include "path/path.h"
+#include <extension/extension.h>
+#include <extension/sysvipc/sysvipc.h>
 
 #include "build.h"
 
@@ -455,6 +457,10 @@ int main(int argc, char *const argv[])
 	talloc_set_log_stderr();
 #endif
 
+	if (argc == 2 && strcmp(argv[1], "--shm-helper") == 0) {
+		sysvipc_shm_helper_main();
+	}
+
 	/* Pre-create the first tracee (pid == 0).  */
 	tracee = get_tracee(NULL, 0, true);
 	if (tracee == NULL)
@@ -563,7 +569,7 @@ void __cyg_profile_func_enter(void *this_function, void *call_site)
 	void *const pointers[] = { this_function, call_site };
 	char **symbols = NULL;
 
-#ifndef __ANDROID__
+#ifdef __GLIBC__
 	symbols = backtrace_symbols(pointers, 2);
 #endif
 	if (symbols == NULL)

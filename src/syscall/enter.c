@@ -26,6 +26,9 @@
 #include <linux/net.h>   /* SYS_*, */
 #include <fcntl.h>       /* AT_FDCWD, */
 #include <limits.h>      /* PATH_MAX, */
+#include <string.h>      /* strcpy */
+#include <sys/prctl.h>   /* PR_SET_DUMPABLE */
+#include <termios.h>     /* TCSETS, TCSANOW */
 
 #include "syscall/syscall.h"
 #include "syscall/sysnum.h"
@@ -565,6 +568,40 @@ int translate_syscall_enter(Tracee *tracee)
 
 		status = translate_path2(tracee, newdirfd, newpath, SYSARG_3, SYMLINK);
 		break;
+
+	case PR_statx:
+		newdirfd = peek_reg(tracee, CURRENT, SYSARG_1);
+
+		status = get_sysarg_path(tracee, newpath, SYSARG_2);
+		if (status < 0)
+			break;
+
+		status = translate_path2(
+			tracee,
+			newdirfd,
+			newpath,
+			SYSARG_2,
+			(peek_reg(tracee, CURRENT, SYSARG_3) & AT_SYMLINK_NOFOLLOW) ? SYMLINK : REGULAR
+		);
+		break;
+
+	case PR_prctl:
+		/* Prevent tracees from setting dumpable flag.
+		 * (Otherwise it could break tracee memory access)  */
+		if (peek_reg(tracee, CURRENT, SYSARG_1) == PR_SET_DUMPABLE) {
+			set_sysnum(tracee, PR_void);
+			status = 0;
+		}
+		break;
+
+#ifdef __ANDROID__
+	case PR_ioctl:
+		/* Using literal value because Termux build system patches TCSAFLUSH */
+		if (peek_reg(tracee, CURRENT, SYSARG_2) == TCSETS + 2 /* + TCSAFLUSH */) {
+			poke_reg(tracee, SYSARG_2, TCSETS + TCSANOW);
+		}
+		break;
+#endif
 	}
 
 end:

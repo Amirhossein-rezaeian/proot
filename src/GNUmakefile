@@ -16,7 +16,7 @@ OBJDUMP  ?= $(CROSS_COMPILE)objdump
 
 CPPFLAGS += -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -I. -I$(VPATH)
 CFLAGS   += -Wall -Wextra -O2
-LDFLAGS  += -ltalloc -llog -Wl,-z,noexecstack
+LDFLAGS  += -ltalloc -Wl,-z,noexecstack
 
 OBJECTS += \
 	cli/cli.o		\
@@ -32,6 +32,7 @@ OBJECTS += \
 	path/binding.o		\
 	path/glue.o		\
 	path/canon.o		\
+	path/f2fs-bug.o		\
 	path/path.o		\
 	path/proc.o		\
 	path/temp.o		\
@@ -49,6 +50,7 @@ OBJECTS += \
 	tracee/reg.o		\
 	tracee/event.o		\
 	tracee/seccomp.o        \
+	tracee/statx.o		\
 	ptrace/ptrace.o		\
 	ptrace/user.o		\
 	ptrace/wait.o		\
@@ -70,13 +72,14 @@ OBJECTS += \
 	extension/fake_id0/symlink.o \
 	extension/fake_id0/mk.o \
 	extension/fake_id0/stat.o \
-	extension/fake_id0/shm.o \
-	extension/fake_id0/sem.o \
-	extension/fake_id0/prctl.o \
         extension/fake_id0/helper_functions.o \
 	extension/fake_id0/fake_id0.o \
 	extension/hidden_files/hidden_files.o \
 	extension/port_switch/port_switch.o \
+	extension/sysvipc/sysvipc.o \
+	extension/sysvipc/sysvipc_msg.o \
+	extension/sysvipc/sysvipc_sem.o \
+	extension/sysvipc/sysvipc_shm.o \
 	extension/link2symlink/link2symlink.o \
 	extension/fix_symlink_size/fix_symlink_size.o \
 	extension/fix_selinux_xattr/fix_selinux_xattr.o
@@ -246,14 +249,14 @@ DEPS = $(OBJECTS:.o=.d) $(LOADER_OBJECTS:.o=.d) $(LOADER-m32_OBJECTS:.o=.d) $(CH
 # PHONY targets
 
 PREFIX ?= /usr/local
-DESTDIR = $(PREFIX)/bin
+BINDIR ?= $(PREFIX)/bin
 
 .PHONY: clean distclean install uninstall
 clean distclean:
 	-$(RM) -f $(CHECK_OBJECTS) $(CHECK_PROGRAMS) $(CHECK_RESULTS) $(OBJECTS) $(LOADER_OBJECTS) $(LOADER-m32_OBJECTS) proot loader/loader loader/loader-m32 $(DEPS) build.h licenses
 
 install: proot
-	$($(quiet)INSTALL) -D $< $(DESTDIR)/$<
+	$($(quiet)INSTALL) -D $< $(DESTDIR)$(BINDIR)/$<
 ifdef PROOT_UNBUNDLE_LOADER
 	$(INSTALL) -D loader/loader $(PROOT_UNBUNDLE_LOADER)/loader
 ifdef HAS_LOADER_32BIT
@@ -262,8 +265,10 @@ endif
 endif
 
 uninstall:
-	-$(RM) -f $(DESTDIR)/proot
+	-$(RM) -f $(DESTDIR)$(BINDIR)/proot
 ifdef PROOT_UNBUNDLE_LOADER
 	$(INSTALL) -D loader/loader $(PROOT_UNBUNDLE_LOADER)/loader
+ifdef HAS_LOADER_32BIT
 	$(INSTALL) -D loader/loader-m32 $(PROOT_UNBUNDLE_LOADER)/loader32
+endif
 endif

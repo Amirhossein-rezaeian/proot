@@ -45,7 +45,6 @@
 
 #include "compat.h"
 
-typedef LIST_HEAD(tracees, tracee) Tracees;
 static Tracees tracees;
 
 
@@ -431,6 +430,9 @@ int new_child(Tracee *parent, word_t clone_flags)
 #ifdef HAS_POKEDATA_WORKAROUND
 	child->pokedata_workaround_stub_addr = parent->pokedata_workaround_stub_addr;
 #endif
+#ifdef ARCH_ARM64
+	child->is_aarch32 = parent->is_aarch32;
+#endif
 
 	/* If CLONE_VM is set, the calling process and the child
 	 * process run in the same memory space [...] any memory
@@ -631,4 +633,8 @@ void kill_all_tracees()
 
 	LIST_FOREACH(tracee, &tracees, link)
 		kill(tracee->pid, SIGKILL);
+}
+
+Tracees *get_tracees_list_head() {
+	return &tracees;
 }

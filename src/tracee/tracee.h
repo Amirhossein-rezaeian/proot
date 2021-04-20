@@ -148,10 +148,10 @@ typedef struct tracee {
 				     && get_sysnum((tracee), ORIGINAL) == sysnum)
 
 	/* How this tracee is restarted.  */
-#ifdef __ANDROID__
-	int
-#else
+#ifdef __GLIBC__
 	enum __ptrace_request
+#else
+	int
 #endif
 		restart_how, last_restart_how;
 
@@ -221,6 +221,10 @@ typedef struct tracee {
 	bool pokedata_workaround_relaunched_syscall;
 #endif
 
+#ifdef ARCH_ARM64
+	bool is_aarch32;
+#endif
+
 
 	/**********************************************************************
 	 * Private but inherited resources                                    *
@@ -287,13 +291,6 @@ typedef struct tracee {
 	/* For diagnostic purpose.  */
 	const char *tool_name;
 
-	/* Because we can only alloc at enter, but might need the address later */
-	word_t word_store[10];
-
-	/* Save off result, in case it is effected by a void system call getting blocked */
-	bool restore_result;
-	word_t saved_result;
-
 } Tracee;
 
 #define HOST_ROOTFS "/host-rootfs"
@@ -310,5 +307,8 @@ extern void terminate_tracee(Tracee *tracee);
 extern void free_terminated_tracees();
 extern int swap_config(Tracee *tracee1, Tracee *tracee2);
 extern void kill_all_tracees();
+
+typedef LIST_HEAD(tracees, tracee) Tracees;
+extern Tracees *get_tracees_list_head();
 
 #endif /* TRACEE_H */

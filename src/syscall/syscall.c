@@ -164,14 +164,12 @@ void translate_syscall(Tracee *tracee)
 #ifdef HAS_POKEDATA_WORKAROUND
 		if (tracee->pokedata_workaround_cancelled_syscall) {
 			tracee->pokedata_workaround_cancelled_syscall = false;
-			if (get_sysnum(tracee, CURRENT) != PR_void) {
-				tracee->pokedata_workaround_relaunched_syscall = true;
-				tracee->restart_how = PTRACE_SYSCALL;
-				tracee->status = 0;
-				poke_reg(tracee, INSTR_POINTER, peek_reg(tracee, CURRENT, INSTR_POINTER) - SYSTRAP_SIZE);
-				push_specific_regs(tracee, false);
-				return;
-			}
+			tracee->pokedata_workaround_relaunched_syscall = true;
+			tracee->restart_how = PTRACE_SYSCALL;
+			tracee->status = 0;
+			poke_reg(tracee, INSTR_POINTER, peek_reg(tracee, CURRENT, INSTR_POINTER) - SYSTRAP_SIZE);
+			push_specific_regs(tracee, false);
+			return;
 		}
 #endif
 
@@ -199,11 +197,6 @@ void translate_syscall(Tracee *tracee)
 #endif
 
 		print_current_regs(tracee, 5, "sysexit start");
-		if ((get_sysnum(tracee, CURRENT) == PR_void) && (tracee->saved_result != peek_reg(tracee, CURRENT, SYSARG_RESULT))) {
-			poke_reg(tracee, SYSARG_RESULT, tracee->saved_result);
-			push_specific_regs(tracee, false);
-			print_current_regs(tracee, 5, "PR_void result restore");
-		}
 
 		/* Translate the syscall only if it was actually
 		 * requested by the tracee, it is not a syscall
@@ -278,6 +271,4 @@ void translate_syscall(Tracee *tracee)
 		print_current_regs(tracee, 5, "sysenter end" );
 	else
 		print_current_regs(tracee, 4, "sysexit end");
-
-	tracee->saved_result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
 }

@@ -118,7 +118,7 @@ static int handle_getdents(Tracee *tracee)
                     /* move the pos and nleft */
                     pos += curr64->d_reclen;
                     nleft += curr64->d_reclen;
-		}
+                }
                 /* move to the next linux_dirent */
                 ptr += curr64->d_reclen;
             }
@@ -137,7 +137,7 @@ static int handle_getdents(Tracee *tracee)
                     /* move the pos and nleft */
                     pos += curr32->d_reclen;
                     nleft += curr32->d_reclen;
-		}
+                }
                 /* move to the next linux_dirent */
                 ptr += curr32->d_reclen;
             }

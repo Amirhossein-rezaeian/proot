@@ -14,6 +14,7 @@
 #include "syscall/syscall.h"
 #include "syscall/sysnum.h"
 #include "path/path.h"
+#include "path/f2fs-bug.h"
 #include "arch.h"
 #include "attribute.h"
 
@@ -293,6 +294,13 @@ static int handle_sysexit_end(Tracee *tracee)
 			return 0;
 	#endif
 
+#ifdef ARCH_ARM64
+		if (tracee->is_aarch32) {
+			VERBOSE(tracee, 1, "Skipping link2symlink stat fixup on AArch32");
+			return 0;
+		}
+#endif
+
 	switch (sysnum) {
 
 	case PR_fstatat64:                 //int fstatat(int dirfd, const char *pathname, struct stat *buf, int flags);
@@ -307,7 +315,7 @@ static int handle_sysexit_end(Tracee *tracee)
 		Reg sysarg_stat;
 		Reg sysarg_path;
 		int status;
-		struct stat statl;
+		struct stat statl = {};
 		ssize_t size;
 		char original[PATH_MAX];
 		char intermediate[PATH_MAX];
@@ -327,7 +335,8 @@ static int handle_sysexit_end(Tracee *tracee)
 					VERBOSE(tracee, 3, "link2symlink: readlink_proc_pid_fd failed, status=%d", status);
 					return 0; // Don't alter syscall result
 				}
-				if (strcmp(original + strlen(original) - strlen(DELETED_SUFFIX), DELETED_SUFFIX) == 0)
+				if (strlen(original) > strlen(DELETED_SUFFIX) &&
+						strcmp(original + strlen(original) - strlen(DELETED_SUFFIX), DELETED_SUFFIX) == 0)
 					original[strlen(original) - strlen(DELETED_SUFFIX)] = '\0';
 			#endif
 			#ifdef USERLAND
@@ -441,6 +450,9 @@ static void translated_path(Tracee *tracee, char translated_path[PATH_MAX])
 	    || sysnum == PR_renameat2) {
 		return;
 	}
+
+	if (should_skip_file_access_due_to_f2fs_bug(tracee, translated_path))
+		return;
 
 	status = my_readlink(translated_path, path);
 	if (status < 0)

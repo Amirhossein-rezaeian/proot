@@ -156,7 +156,7 @@ char * get_name(char path[PATH_MAX])
 	int offset;
 
 	offset = strlen(path) - 1;
-	if ((path[offset] == '/') && (offset > 0)) 
+	if ((path[offset] == '/') && (offset > 0))
 		path[offset] = '\0';
 
 	name = strrchr(path,'/');

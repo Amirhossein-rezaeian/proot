@@ -38,6 +38,7 @@
 #include "tracee/mem.h"
 #include "tracee/abi.h"
 #include "tracee/seccomp.h"
+#include "tracee/statx.h"
 #include "path/path.h"
 #include "ptrace/ptrace.h"
 #include "ptrace/wait.h"
@@ -362,6 +363,19 @@ void translate_syscall_exit(Tracee *tracee)
 			break;
 		}
 
+		if (status == 1) {
+			/* Empty path was passed (""),
+			 * indicating that path is pointed to by fd passed in first argument */
+			word_t dirfd = peek_reg(tracee, ORIGINAL, SYSARG_1);
+			if (syscall_number == PR_readlink || dirfd < 0) {
+				status = -EBADF;
+				break;
+			}
+			status = readlink_proc_pid_fd(tracee->pid, dirfd, referer);
+			if (status < 0)
+				break;
+		}
+
 		status = detranslate_path(tracee, referee, referer);
 		if (status < 0)
 			break;
@@ -510,6 +524,10 @@ void translate_syscall_exit(Tracee *tracee)
 
 		goto end;
 	}
+
+	case PR_statx:
+		status = handle_statx_syscall(tracee, false);
+		break;
 
 	default:
 		goto end;

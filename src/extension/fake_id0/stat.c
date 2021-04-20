@@ -9,6 +9,7 @@
 #include "syscall/seccomp.h"
 #include "extension/fake_id0/stat.h"
 #include "extension/fake_id0/helper_functions.h"
+#include "tracee/statx.h"
 
 #ifndef USERLAND
 int handle_stat_exit_end(Tracee *tracee, Config *config, Reg stat_sysarg) {
@@ -157,3 +158,22 @@ fallback:
 	return 0;
 }
 #endif /* ifdef USERLAND */
+
+int fake_id0_handle_statx_syscall(Tracee *tracee, Config *config, uintptr_t statx_state_raw) {
+	(void) tracee;
+	// TODO: USERLAND
+	struct statx_syscall_state *state = (struct statx_syscall_state *) statx_state_raw;
+	if (state->statx_buf.stx_mask & STATX_UID) {
+		if (state->statx_buf.stx_uid == getuid()) {
+			state->statx_buf.stx_uid = config->suid;
+			state->updated_stats = true;
+		}
+	}
+	if (state->statx_buf.stx_mask & STATX_GID) {
+		if (state->statx_buf.stx_gid == getuid()) {
+			state->statx_buf.stx_gid = config->sgid;
+			state->updated_stats = true;
+		}
+	}
+	return 0;
+}
