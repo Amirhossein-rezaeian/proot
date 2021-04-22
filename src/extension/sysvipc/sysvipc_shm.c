@@ -118,7 +118,7 @@ static int sysvipc_shm_send_helper_request(struct SysVIpcShmHelperRequest *reque
 		if (pipe2(pipe_helper2proot, O_CLOEXEC) < 0) {
 			close(pipe_proot2helper[0]);
 			close(pipe_proot2helper[1]);
-			return -1;
+			return -2;
 		}
 		pid_t forked = fork();
 		if (forked == 0) {
@@ -149,7 +149,7 @@ static int sysvipc_shm_send_helper_request(struct SysVIpcShmHelperRequest *reque
 			close(pipe_proot2helper[1]);
 			close(pipe_helper2proot[0]);
 			close(pipe_helper2proot[1]);
-			return -1;
+			return -3;
 		} else {
 			close(pipe_proot2helper[0]);
 			close(pipe_helper2proot[1]);
@@ -157,7 +157,7 @@ static int sysvipc_shm_send_helper_request(struct SysVIpcShmHelperRequest *reque
 			if (nread != SYSVIPC_SHMHELPER_SOCKET_LEN) {
 				close(pipe_proot2helper[1]);
 				close(pipe_helper2proot[0]);
-				return -1;
+				return -4;
 			}
 			sysvipc_shm_helper_addr.sun_family = AF_UNIX;
 			launched_helper = true;
@@ -170,6 +170,8 @@ static int sysvipc_shm_send_helper_request(struct SysVIpcShmHelperRequest *reque
 	if (request->op == SHMHELPER_ALLOC) {
 		int fd = -1;
 		read(helper2proot, &fd, sizeof(fd));
+		if (fd < 0)
+			return -5;
 		return fd;
 	}
 	return 0;
@@ -217,7 +219,7 @@ int sysvipc_shmget(Tracee *tracee, struct SysVIpcConfig *config)
 		};
 		shm->fd = sysvipc_shm_send_helper_request(&request);
 		if (shm->fd < 0) {
-			return -1; //-ENOSPC;
+			return shm->fd;
 		}
 		memset(&shm->stats.shm_segsz, 0, sizeof(shm->stats.shm_segsz));
 		shm->stats.shm_perm.mode = shmflg & 0777;
@@ -614,7 +616,7 @@ int sysvipc_shm_namespace_destructor(struct SysVIpcNamespace *ipc_namespace) {
 static int sysvipc_shm_do_allocate(size_t size, int shmid) {
 #ifdef __ANDROID__
 	int fd = open("/dev/ashmem", O_RDWR, 0);
-	if (fd < 0) return -2; //ENOSPC;
+	if (fd < 0) return -ENOSPC;
 
 	char name_buffer[ASHMEM_NAME_LEN] = {0};
 	snprintf(name_buffer, ASHMEM_NAME_LEN - 1, "sysvshm_0x%X", shmid);
@@ -623,20 +625,20 @@ static int sysvipc_shm_do_allocate(size_t size, int shmid) {
 	int ret = ioctl(fd, ASHMEM_SET_SIZE, size);
 	if (ret < 0) {
 		close(fd);
-		return -3; //ENOSPC;
+		return -ENOSPC;
 	}
 
 	return fd;
 #else
 	(void) shmid;
 	FILE *fdesc = tmpfile();
-	if (!fdesc) return -4; //ENOSPC;
+	if (!fdesc) return -ENOSPC;
 	int fd = dup(fileno(fdesc));
 	fclose(fdesc);
-	if (fd < 0) return -5; //ENOSPC;
+	if (fd < 0) return -ENOSPC;
 
 	if (ftruncate(fd, size) == -1) {
-		return -6; //ENOSPC;
+		return -ENOSPC;
 	}
 
 	return fd;
