@@ -137,12 +137,12 @@ static int sysvipc_proc_handler(
 
 	const char *path = create_temp_file(tracee->ctx, "prootseq");
 	if (path == NULL) {
-		return -1;
+		return -ENOMEM;
 	}
 
 	FILE *fp = fopen(path, "w");
 	if (fp == NULL) {
-		return -2;
+		return -ENOMEM;
 	}
 	handler(fp, config->ipc_namespace);
 	fclose(fp);

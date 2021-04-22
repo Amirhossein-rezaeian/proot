@@ -217,7 +217,7 @@ int sysvipc_shmget(Tracee *tracee, struct SysVIpcConfig *config)
 		};
 		shm->fd = sysvipc_shm_send_helper_request(&request);
 		if (shm->fd < 0) {
-			return -ENOSPC;
+			return -1; //-ENOSPC;
 		}
 		memset(&shm->stats.shm_segsz, 0, sizeof(shm->stats.shm_segsz));
 		shm->stats.shm_perm.mode = shmflg & 0777;
@@ -614,7 +614,7 @@ int sysvipc_shm_namespace_destructor(struct SysVIpcNamespace *ipc_namespace) {
 static int sysvipc_shm_do_allocate(size_t size, int shmid) {
 #ifdef __ANDROID__
 	int fd = open("/dev/ashmem", O_RDWR, 0);
-	if (fd < 0) return -ENOSPC;
+	if (fd < 0) return -2; //ENOSPC;
 
 	char name_buffer[ASHMEM_NAME_LEN] = {0};
 	snprintf(name_buffer, ASHMEM_NAME_LEN - 1, "sysvshm_0x%X", shmid);
@@ -623,20 +623,20 @@ static int sysvipc_shm_do_allocate(size_t size, int shmid) {
 	int ret = ioctl(fd, ASHMEM_SET_SIZE, size);
 	if (ret < 0) {
 		close(fd);
-		return -ENOSPC;
+		return -3; //ENOSPC;
 	}
 
 	return fd;
 #else
 	(void) shmid;
 	FILE *fdesc = tmpfile();
-	if (!fdesc) return -ENOSPC;
+	if (!fdesc) return -4; //ENOSPC;
 	int fd = dup(fileno(fdesc));
 	fclose(fdesc);
-	if (fd < 0) return -ENOSPC;
+	if (fd < 0) return -5; //ENOSPC;
 
 	if (ftruncate(fd, size) == -1) {
-		return -ENOSPC;
+		return -6; //ENOSPC;
 	}
 
 	return fd;
