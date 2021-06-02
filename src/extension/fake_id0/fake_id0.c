@@ -1076,6 +1076,22 @@ static int handle_sigsys(Tracee *tracee, Config *config)
 	case PR_setresgid32:
 		SETRESXID(g, CURRENT);
 
+	case PR_chroot:
+		return handle_chroot_exit_end(tracee, config, true);
+
+	default:
+		return 0;
+	}
+}
+
+static int handle_sigsys_new(Tracee *tracee, Config *config)
+{
+	word_t sysnum;
+	int status;
+
+	sysnum = get_sysnum(tracee, CURRENT);
+	switch (sysnum) {
+
 	case PR_shmget:
 	case PR_shmctl:
 	case PR_semget:
@@ -1099,9 +1115,6 @@ static int handle_sigsys(Tracee *tracee, Config *config)
 		if (status < 0)
 			return status;
 		return 2;
-
-	case PR_chroot:
-		return handle_chroot_exit_end(tracee, config, true);
 
 	default:
 		return 0;
@@ -1294,7 +1307,7 @@ int fake_id0_callback(Extension *extension, ExtensionEvent event, intptr_t data1
 	case SIGSYS_OCC: {
 		Tracee *tracee = TRACEE(extension);
 		Config *config = talloc_get_type_abort(extension->config, Config);
-		word_t sysnum = get_sysnum(tracee, CURRENT);
+				word_t sysnum = get_sysnum(tracee, CURRENT);
 		int status;
 
 		switch (sysnum) {
@@ -1318,11 +1331,10 @@ int fake_id0_callback(Extension *extension, ExtensionEvent event, intptr_t data1
 			break;
 
 		default:
-			return 0;
+			return handle_sigsys_new(tracee, config);
 		}
 
-		return 1; 
-
+		return 1;
 	}
 
 	case TRANSLATED_PATH: {
