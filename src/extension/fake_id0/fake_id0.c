@@ -1023,19 +1023,19 @@ static int handle_sysexit_end(Tracee *tracee, Config *config)
 	}	
 #endif
 	case PR_shmat: 
-		return handle_shmat_sysexit_end(tracee, stage);
+		return handle_shmat_sysexit_end(tracee, ORIGINAL);
 	case PR_shmdt:
 		return handle_shmdt_sysexit_end(tracee);
 	case PR_shmctl:
-		return handle_shmctl_sysexit_end(tracee, config, stage);
+		return handle_shmctl_sysexit_end(tracee, config, ORIGINAL);
 	case PR_shmget:
-		return handle_shmget_sysexit_end(tracee, stage);
+		return handle_shmget_sysexit_end(tracee, ORIGINAL);
 	case PR_semget:
-		return handle_semget_sysexit_end(tracee, stage);
+		return handle_semget_sysexit_end(tracee, ORIGINAL);
 	case PR_semctl:
-		return handle_semctl_sysexit_end(tracee, stage);
+		return handle_semctl_sysexit_end(tracee, ORIGINAL);
 	case PR_semop:
-		return handle_semop_sysexit_end(tracee, stage);
+		return handle_semop_sysexit_end(tracee, ORIGINAL);
 	case PR_prctl:
 		return handle_prctl_sysexit_end(tracee);
 
