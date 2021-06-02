@@ -1267,9 +1267,7 @@ int fake_id0_callback(Extension *extension, ExtensionEvent event, intptr_t data1
 		return handle_sysenter_end(tracee, config);
 	}
 
-#ifdef USERLAND
 	case SYSCALL_CHAINED_EXIT:
-#endif
 	case SYSCALL_EXIT_END: {
 		Tracee *tracee = TRACEE(extension);
 		Config *config = talloc_get_type_abort(extension->config, Config);
