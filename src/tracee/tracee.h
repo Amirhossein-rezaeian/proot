@@ -291,6 +291,13 @@ typedef struct tracee {
 	/* For diagnostic purpose.  */
 	const char *tool_name;
 
+	/* Because we can only alloc at enter, but might need the address later */
+	word_t word_store[10];
+
+	/* Save off result, in case it is effected by a void system call getting blocked */
+	bool restore_result;
+	word_t saved_result;
+
 } Tracee;
 
 #define HOST_ROOTFS "/host-rootfs"
