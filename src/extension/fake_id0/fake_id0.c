@@ -351,14 +351,6 @@ static FilteredSysnum filtered_sysnums[] = {
 	{ PR_stat64,		FILTER_SYSEXIT },
 	{ PR_statfs,		FILTER_SYSEXIT },
 	{ PR_statfs64,		FILTER_SYSEXIT },
-	{ PR_shmat,		FILTER_SYSEXIT },
-	{ PR_shmctl,		FILTER_SYSEXIT },
-	{ PR_shmdt,		FILTER_SYSEXIT },
-	{ PR_shmget,		FILTER_SYSEXIT },
-	{ PR_semget,		FILTER_SYSEXIT },
-	{ PR_semctl,		FILTER_SYSEXIT },
-	{ PR_semop,		FILTER_SYSEXIT },
-	{ PR_prctl,		FILTER_SYSEXIT },
 	FILTERED_SYSNUM_END,
 };
 
@@ -732,31 +724,6 @@ static int handle_sysenter_end(Tracee *tracee, Config *config)
 		set_sysnum(tracee, PR_void);
 		return 0;
 
-	/* int shmctl(int shmid, int cmd, struct shmid_ds *buf); */
-	case PR_shmctl:
-	/* int shmget(key_t key, size_t size, int shmflg); */
-	case PR_shmget:
-		set_sysnum(tracee, PR_void);
-		return 0;
-	/* void *shmat(int shmid, const void *shmaddr, int shmflg); */
-	case PR_shmat:
-		return handle_shmat_sysenter_end(tracee, ORIGINAL);
-	/* int shmdt(const void *shmaddr); */
-	case PR_shmdt:
-		return handle_shmdt_sysenter_end(tracee, ORIGINAL);
-
-	/* int semget(key_t key, int nsems, int semflg); */
-	case PR_semget:
-	/* int semctl(int semid, int semnum, int cmd, ...); */
-	case PR_semctl:
-	/* int semop(int semid, struct sembuf *sops, size_t nsops); */
-	case PR_semop:
-		set_sysnum(tracee, PR_void);
-		return 0;
-
-	case PR_prctl:
-		return handle_prctl_sysenter_end(tracee);
-
 	default:
 		return 0;
 	}
@@ -1024,22 +991,6 @@ static int handle_sysexit_end(Tracee *tracee, Config *config)
 		return 0;
 	}	
 #endif
-	case PR_shmat: 
-		return handle_shmat_sysexit_end(tracee, stage);
-	case PR_shmdt:
-		return handle_shmdt_sysexit_end(tracee);
-	case PR_shmctl:
-		return handle_shmctl_sysexit_end(tracee, config, stage);
-	case PR_shmget:
-		return handle_shmget_sysexit_end(tracee, stage);
-	case PR_semget:
-		return handle_semget_sysexit_end(tracee, stage);
-	case PR_semctl:
-		return handle_semctl_sysexit_end(tracee, stage);
-	case PR_semop:
-		return handle_semop_sysexit_end(tracee, stage);
-	case PR_prctl:
-		return handle_prctl_sysexit_end(tracee);
 
 	default:
 		return 0;
@@ -1066,11 +1017,6 @@ static int handle_sigsys(Tracee *tracee, Config *config)
 	case PR_setresuid32:
 	case PR_setresgid:
 	case PR_setresgid32:
-	case PR_shmget:
-	case PR_shmctl:
-	case PR_semget:
-	case PR_semctl:
-	case PR_semop:
 		/* These syscalls are fully emulated.  */
 		set_sysnum(tracee, PR_getuid);
 		return 3;
@@ -1079,16 +1025,6 @@ static int handle_sigsys(Tracee *tracee, Config *config)
 		if (status < 0)
 			return status;
 		return 1;
-	case PR_shmat:
-		status = handle_shmat_sysenter_end(tracee, CURRENT);
-		if (status < 0)
-			return status;
-		return 3;
-	case PR_shmdt:
-		status = handle_shmdt_sysenter_end(tracee, CURRENT);
-		if (status < 0)
-			return status;
-		return 3;
 	default:
 		return 0;
 	}

@@ -169,9 +169,11 @@ static int sysvipc_shm_send_helper_request(struct SysVIpcShmHelperRequest *reque
 	write(proot2helper, request, sizeof(*request));
 	if (request->op == SHMHELPER_ALLOC) {
 		int fd = -1;
-		read(helper2proot, &fd, sizeof(fd));
-		if (fd < 0)
+		ssize_t read_result = read(helper2proot, &fd, sizeof(fd));
+		if (read_result < 0)
 			return -5;
+		if (fd < 0)
+			return -6;
 		return fd;
 	}
 	return 0;
