@@ -1073,7 +1073,7 @@ static int handle_sigsys(Tracee *tracee, Config *config)
 	case PR_semop:
 		/* These syscalls are fully emulated.  */
 		set_sysnum(tracee, PR_getuid);
-		return 2;
+		return 3;
 	case PR_chroot:	
 		status = handle_chroot_exit_end(tracee, config, true);
 		if (status < 0)
@@ -1083,12 +1083,12 @@ static int handle_sigsys(Tracee *tracee, Config *config)
 		status = handle_shmat_sysenter_end(tracee, CURRENT);
 		if (status < 0)
 			return status;
-		return 2;
+		return 3;
 	case PR_shmdt:
 		status = handle_shmdt_sysenter_end(tracee, CURRENT);
 		if (status < 0)
 			return status;
-		return 2;
+		return 3;
 	default:
 		return 0;
 	}
