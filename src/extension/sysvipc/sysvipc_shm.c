@@ -22,7 +22,8 @@
 #include <fcntl.h> /* open, fcntl */
 
 #ifdef __ANDROID__
-#include <sharedmem.h> /* ASharedMemory_* */
+#include <linux/ashmem.h> /* ASHMEM_* */
+#include <android/sharedmem.h> /* ASharedMemory_* */
 #else
 #include <unistd.h> /* ftruncate */
 #endif
