@@ -650,7 +650,7 @@ static int sysvipc_shm_do_allocate(size_t size, int shmid) {
 void sysvipc_shm_helper_main() {
 	char *path;
 	char *logpath;
-	int logfile;
+	FILE *logfile;
 	int socket_server_fd = socket(AF_UNIX, SOCK_SEQPACKET, 0);
 	struct sockaddr_un addr = {
 		.sun_family = AF_UNIX
@@ -658,7 +658,7 @@ void sysvipc_shm_helper_main() {
 	for (int i = 0;; i++) {
 		logpath = create_temp_name(NULL, "prootshmlog");
 		(void) mktemp(logpath);
-		logfile = fopen(logpath, 'a');
+		logfile = fopen(logpath, "a");
 		path = create_temp_name(NULL, "prootshm");
 		(void) mktemp(path);
 
