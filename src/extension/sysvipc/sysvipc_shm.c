@@ -22,7 +22,7 @@
 #include <fcntl.h> /* open, fcntl */
 
 #ifdef __ANDROID__
-#include <linux/ashmem.h> /* ASHMEM_* */
+#include <sharedmem.h> /* ASharedMemory_* */
 #else
 #include <unistd.h> /* ftruncate */
 #endif
@@ -617,18 +617,11 @@ int sysvipc_shm_namespace_destructor(struct SysVIpcNamespace *ipc_namespace) {
 
 static int sysvipc_shm_do_allocate(size_t size, int shmid) {
 #ifdef __ANDROID__
-	int fd = open("/dev/ashmem", O_RDWR, 0);
-	if (fd < 0) return -ENOSPC;
-
 	char name_buffer[ASHMEM_NAME_LEN] = {0};
 	snprintf(name_buffer, ASHMEM_NAME_LEN - 1, "sysvshm_0x%X", shmid);
-	ioctl(fd, ASHMEM_SET_NAME, name_buffer);
 
-	int ret = ioctl(fd, ASHMEM_SET_SIZE, size);
-	if (ret < 0) {
-		close(fd);
-		return -ENOSPC;
-	}
+	int fd = ASharedMemory_create(name_buffer, size);
+	if (fd < 0) return -ENOSPC;
 
 	return fd;
 #else
