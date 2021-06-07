@@ -688,6 +688,8 @@ void sysvipc_shm_helper_main() {
 		TALLOC_FREE(path);
 	}
 
+	fprintf(logfile, "proot-shm-helper: Bind success\n");
+
 	if (listen(socket_server_fd, 1) < 0) {
 		perror("proot-shm-helper: listen");
 		fprintf(logfile, "proot-shm-helper: listen\n");
@@ -696,11 +698,14 @@ void sysvipc_shm_helper_main() {
 		_exit(0);
 	}
 
+	fprintf(logfile, "proot-shm-helper: listen success\n");
+
 	write(1, addr.sun_path, SYSVIPC_SHMHELPER_SOCKET_LEN);
 	for (;;) {
 		struct SysVIpcShmHelperRequest request;
 		int status = TEMP_FAILURE_RETRY(read(0, &request, sizeof(request)));
 		if (status == 0) {
+			fprintf(logfile, "proot-shm-helper: read success\n");
 			break;
 		}
 		if (status < 0) {
