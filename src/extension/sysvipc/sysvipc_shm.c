@@ -764,6 +764,8 @@ void sysvipc_shm_helper_main() {
 		}
 	}
 
+	fprintf(logfile, "proot-shm-helper: exiting\n");
+	fclose(logfile);
 	unlink(path);
 	_exit(0);
 }
