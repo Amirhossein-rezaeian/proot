@@ -649,17 +649,23 @@ static int sysvipc_shm_do_allocate(size_t size, int shmid) {
 
 void sysvipc_shm_helper_main() {
 	char *path;
+	int logfile;
 	int socket_server_fd = socket(AF_UNIX, SOCK_SEQPACKET, 0);
 	struct sockaddr_un addr = {
 		.sun_family = AF_UNIX
 	};
 	for (int i = 0;; i++) {
+		path = create_temp_name(NULL, "prootshmlog");
+		(void) mktemp(path);
+		logfile = fopen(path, 'a');
 		path = create_temp_name(NULL, "prootshm");
 		(void) mktemp(path);
 
 		if (strlen(path) > SYSVIPC_SHMHELPER_SOCKET_LEN) {
 			close(socket_server_fd);
 			fprintf(stderr, "proot-shm-helper: Temporary path too long\n");
+			fprintf(logfile, "proot-shm-helper: Temporary path too long\n");
+			fclose(logfile);
 			_exit(1);
 		}
 
@@ -672,6 +678,8 @@ void sysvipc_shm_helper_main() {
 
 		if (i >= 64) {
 			perror("proot-shm-helper: bind");
+			fprintf(logfile, "proot-shm-helper: bind\n");
+			fclose(logfile);
 			TALLOC_FREE(path);
 			close(socket_server_fd);
 			_exit(1);
@@ -681,6 +689,8 @@ void sysvipc_shm_helper_main() {
 
 	if (listen(socket_server_fd, 1) < 0) {
 		perror("proot-shm-helper: listen");
+		fprintf(logfile, "proot-shm-helper: listen\n");
+		fclose(logfile);
 		unlink(path);
 		_exit(0);
 	}
@@ -694,20 +704,24 @@ void sysvipc_shm_helper_main() {
 		}
 		if (status < 0) {
 			perror("proot-shm-helper: read");
+			fprintf(logfile, "proot-shm-helper: read\n");
 			break;
 		}
 		if (status != sizeof(request)) {
 			fprintf(stderr, "proot-shm-helper: Incomplete request\n");
+			fprintf(logfile, "proot-shm-helper: Incomplete request\n");
 			break;
 		}
 		switch (request.op) {
 		case SHMHELPER_ALLOC:
 		{
 			int fd = sysvipc_shm_do_allocate(request.size, request.fd);
+			fprintf(logfile, "proot-shm-helper: Alloc\n");
 			write(1, &fd, sizeof(int));
 			break;
 		}
 		case SHMHELPER_FREE:
+			fprintf(logfile, "proot-shm-helper: Free\n");
 			close(request.fd);
 			break;
 		case SHMHELPER_DISTRIBUTE:
@@ -733,6 +747,7 @@ void sysvipc_shm_helper_main() {
 			};
 
 			struct cmsghdr* cmsg = CMSG_FIRSTHDR(&message_header);
+			fprintf(logfile, "proot-shm-helper: Distribute\n");
 			cmsg->cmsg_len = message_header.msg_controllen; // sizeof(int);
 			cmsg->cmsg_level = SOL_SOCKET;
 			cmsg->cmsg_type = SCM_RIGHTS;
@@ -744,6 +759,7 @@ void sysvipc_shm_helper_main() {
 		}
 		default:
 			fprintf(stderr, "proot-shm-helper: Bad request\n");
+			fprintf(logfile, "proot-shm-helper: Bad request\n");
 			break;
 		}
 	}
