@@ -618,6 +618,7 @@ int sysvipc_shm_namespace_destructor(struct SysVIpcNamespace *ipc_namespace) {
 
 static int sysvipc_shm_do_allocate(size_t size, int shmid) {
 #ifdef __ANDROID__
+ #ifdef PROTECTED_ASHMEM
 	char name_buffer[ASHMEM_NAME_LEN] = {0};
 	snprintf(name_buffer, ASHMEM_NAME_LEN - 1, "sysvshm_0x%X", shmid);
 
@@ -625,6 +626,22 @@ static int sysvipc_shm_do_allocate(size_t size, int shmid) {
 	if (fd < 0) return -ENOSPC;
 
 	return fd;
+ #else
+	int fd = open("/dev/ashmem", O_RDWR, 0);
+	if (fd < 0) return -ENOSPC;
+
+	char name_buffer[ASHMEM_NAME_LEN] = {0};
+	snprintf(name_buffer, ASHMEM_NAME_LEN - 1, "sysvshm_0x%X", shmid);
+	ioctl(fd, ASHMEM_SET_NAME, name_buffer);
+
+	int ret = ioctl(fd, ASHMEM_SET_SIZE, size);
+	if (ret < 0) {
+		close(fd);
+		return -ENOSPC;
+	}
+
+	return fd;
+ #endif
 #else
 	(void) shmid;
 	FILE *fdesc = tmpfile();
@@ -643,24 +660,17 @@ static int sysvipc_shm_do_allocate(size_t size, int shmid) {
 
 void sysvipc_shm_helper_main() {
 	char *path;
-	char *logpath;
-	FILE *logfile;
 	int socket_server_fd = socket(AF_UNIX, SOCK_SEQPACKET, 0);
 	struct sockaddr_un addr = {
 		.sun_family = AF_UNIX
 	};
 	for (int i = 0;; i++) {
-		logpath = create_temp_name(NULL, "prootshmlog");
-		(void) mktemp(logpath);
-		logfile = fopen(logpath, "a");
 		path = create_temp_name(NULL, "prootshm");
 		(void) mktemp(path);
 
 		if (strlen(path) > SYSVIPC_SHMHELPER_SOCKET_LEN) {
 			close(socket_server_fd);
 			fprintf(stderr, "proot-shm-helper: Temporary path too long\n");
-			fprintf(logfile, "proot-shm-helper: Temporary path too long\n");
-			fclose(logfile);
 			_exit(1);
 		}
 
@@ -673,8 +683,6 @@ void sysvipc_shm_helper_main() {
 
 		if (i >= 64) {
 			perror("proot-shm-helper: bind");
-			fprintf(logfile, "proot-shm-helper: bind\n");
-			fclose(logfile);
 			TALLOC_FREE(path);
 			close(socket_server_fd);
 			_exit(1);
@@ -682,46 +690,35 @@ void sysvipc_shm_helper_main() {
 		TALLOC_FREE(path);
 	}
 
-	fprintf(logfile, "proot-shm-helper: Bind success\n");
-
 	if (listen(socket_server_fd, 1) < 0) {
 		perror("proot-shm-helper: listen");
-		fprintf(logfile, "proot-shm-helper: listen\n");
-		fclose(logfile);
 		unlink(path);
 		_exit(0);
 	}
-
-	fprintf(logfile, "proot-shm-helper: listen success\n");
 
 	write(1, addr.sun_path, SYSVIPC_SHMHELPER_SOCKET_LEN);
 	for (;;) {
 		struct SysVIpcShmHelperRequest request;
 		int status = TEMP_FAILURE_RETRY(read(0, &request, sizeof(request)));
 		if (status == 0) {
-			fprintf(logfile, "proot-shm-helper: read success\n");
 			break;
 		}
 		if (status < 0) {
 			perror("proot-shm-helper: read");
-			fprintf(logfile, "proot-shm-helper: read\n");
 			break;
 		}
 		if (status != sizeof(request)) {
 			fprintf(stderr, "proot-shm-helper: Incomplete request\n");
-			fprintf(logfile, "proot-shm-helper: Incomplete request\n");
 			break;
 		}
 		switch (request.op) {
 		case SHMHELPER_ALLOC:
 		{
 			int fd = sysvipc_shm_do_allocate(request.size, request.fd);
-			fprintf(logfile, "proot-shm-helper: Alloc\n");
 			write(1, &fd, sizeof(int));
 			break;
 		}
 		case SHMHELPER_FREE:
-			fprintf(logfile, "proot-shm-helper: Free\n");
 			close(request.fd);
 			break;
 		case SHMHELPER_DISTRIBUTE:
@@ -747,7 +744,6 @@ void sysvipc_shm_helper_main() {
 			};
 
 			struct cmsghdr* cmsg = CMSG_FIRSTHDR(&message_header);
-			fprintf(logfile, "proot-shm-helper: Distribute\n");
 			cmsg->cmsg_len = message_header.msg_controllen; // sizeof(int);
 			cmsg->cmsg_level = SOL_SOCKET;
 			cmsg->cmsg_type = SCM_RIGHTS;
@@ -759,13 +755,10 @@ void sysvipc_shm_helper_main() {
 		}
 		default:
 			fprintf(stderr, "proot-shm-helper: Bad request\n");
-			fprintf(logfile, "proot-shm-helper: Bad request\n");
 			break;
 		}
 	}
 
-	fprintf(logfile, "proot-shm-helper: exiting\n");
-	fclose(logfile);
 	unlink(path);
 	_exit(0);
 }
