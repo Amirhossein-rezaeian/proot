@@ -745,9 +745,7 @@ static int handle_sysexit_end(Tracee *tracee, Config *config)
 	Reg stat_sysarg = SYSARG_2;
 #endif
 
-	RegVersion stage = (tracee->restore_original_regs_after_seccomp_event) ? ORIGINAL_SECCOMP_REWRITE : ORIGINAL;
-
-	sysnum = get_sysnum(tracee, stage);
+	sysnum = get_sysnum(tracee, ORIGINAL);
 
 #ifdef USERLAND
 	if ((get_sysnum(tracee, CURRENT) == PR_fstat) || (get_sysnum(tracee, CURRENT) == PR_fstat64)) {
@@ -764,7 +762,7 @@ static int handle_sysexit_end(Tracee *tracee, Config *config)
 		/* Get the address of the 'stat' structure.  */
 		sysarg = SYSARG_2;
 		
-		address = peek_reg(tracee, stage, sysarg);
+		address = peek_reg(tracee, ORIGINAL, sysarg);
 		
 		/* Sanity checks.  */
 		assert(__builtin_types_compatible_p(uid_t, uint32_t));
@@ -805,13 +803,13 @@ static int handle_sysexit_end(Tracee *tracee, Config *config)
 		path[result] = '\0';
 
 		if ((strcmp(path + strlen(path) - strlen(" (deleted)"), " (deleted)") == 0) || (strncmp(path, "pipe", 4) == 0)) {
-			register_chained_syscall(tracee, sysnum, peek_reg(tracee, stage, SYSARG_1), peek_reg(tracee, stage, SYSARG_2), 0, 0, 0, 0);
+			register_chained_syscall(tracee, sysnum, peek_reg(tracee, ORIGINAL, SYSARG_1), peek_reg(tracee, ORIGINAL, SYSARG_2), 0, 0, 0, 0);
 		} else {
 			write_data(tracee, peek_reg(tracee, MODIFIED, SYSARG_3), path, sizeof(path));
 #		   if defined(__x86_64__)
-				register_chained_syscall(tracee, PR_newfstatat, AT_FDCWD, peek_reg(tracee, MODIFIED, SYSARG_3), peek_reg(tracee, stage, SYSARG_2), 0, 0, 0);
+				register_chained_syscall(tracee, PR_newfstatat, AT_FDCWD, peek_reg(tracee, MODIFIED, SYSARG_3), peek_reg(tracee, ORIGINAL, SYSARG_2), 0, 0, 0);
 #		   else
-				register_chained_syscall(tracee, PR_fstatat64, AT_FDCWD, peek_reg(tracee, MODIFIED, SYSARG_3), peek_reg(tracee, stage, SYSARG_2), 0, 0, 0);
+				register_chained_syscall(tracee, PR_fstatat64, AT_FDCWD, peek_reg(tracee, MODIFIED, SYSARG_3), peek_reg(tracee, ORIGINAL, SYSARG_2), 0, 0, 0);
 #		   endif
 		}
 
@@ -823,27 +821,27 @@ static int handle_sysexit_end(Tracee *tracee, Config *config)
 
 	case PR_setuid:
 	case PR_setuid32:
-		SETXID(uid, stage);
+		SETXID(uid, ORIGINAL);
 
 	case PR_setgid:
 	case PR_setgid32:
-		SETXID(gid, stage);
+		SETXID(gid, ORIGINAL);
 
 	case PR_setreuid:
 	case PR_setreuid32:
-		SETREXID(uid, stage);
+		SETREXID(uid, ORIGINAL);
 
 	case PR_setregid:
 	case PR_setregid32:
-		SETREXID(gid, stage);
+		SETREXID(gid, ORIGINAL);
 
 	case PR_setresuid:
 	case PR_setresuid32:
-		SETRESXID(u, stage);
+		SETRESXID(u, ORIGINAL);
 
 	case PR_setresgid:
 	case PR_setresgid32:
-		SETRESXID(g, stage);
+		SETRESXID(g, ORIGINAL);
 
 	case PR_setfsuid:
 	case PR_setfsuid32:
@@ -997,31 +995,37 @@ static int handle_sysexit_end(Tracee *tracee, Config *config)
 static int handle_sigsys(Tracee *tracee, Config *config)
 {
 	word_t sysnum;
-	int status;
 
 	sysnum = get_sysnum(tracee, CURRENT);
 	switch (sysnum) {
 
 	case PR_setuid:
 	case PR_setuid32:
+		SETXID(uid, CURRENT);
+		
 	case PR_setgid:
 	case PR_setgid32:
+		SETXID(gid, CURRENT);
+
 	case PR_setreuid:
 	case PR_setreuid32:
+		SETREXID(uid, CURRENT);
+
 	case PR_setregid:
 	case PR_setregid32:
+		SETREXID(gid, CURRENT);
+
 	case PR_setresuid:
 	case PR_setresuid32:
+		SETRESXID(u, CURRENT);
+
 	case PR_setresgid:
 	case PR_setresgid32:
-		/* These syscalls are fully emulated.  */
-		set_sysnum(tracee, PR_getuid);
-		return 3;
-	case PR_chroot:	
-		status = handle_chroot_exit_end(tracee, config, true);
-		if (status < 0)
-			return status;
-		return 1;
+		SETRESXID(g, CURRENT);
+
+	case PR_chroot:
+		return handle_chroot_exit_end(tracee, config, true);
+
 	default:
 		return 0;
 	}
@@ -1200,7 +1204,9 @@ int fake_id0_callback(Extension *extension, ExtensionEvent event, intptr_t data1
 		return handle_sysenter_end(tracee, config);
 	}
 
+#ifdef USERLAND
 	case SYSCALL_CHAINED_EXIT:
+#endif
 	case SYSCALL_EXIT_END: {
 		Tracee *tracee = TRACEE(extension);
 		Config *config = talloc_get_type_abort(extension->config, Config);
@@ -1211,7 +1217,34 @@ int fake_id0_callback(Extension *extension, ExtensionEvent event, intptr_t data1
 	case SIGSYS_OCC: {
 		Tracee *tracee = TRACEE(extension);
 		Config *config = talloc_get_type_abort(extension->config, Config);
-		return handle_sigsys(tracee, config);
+		word_t sysnum = get_sysnum(tracee, CURRENT);
+		int status;
+
+		switch (sysnum) {
+
+		case PR_setuid:
+		case PR_setuid32:
+		case PR_setgid:
+		case PR_setgid32:
+		case PR_setreuid:
+		case PR_setreuid32:
+		case PR_setregid:
+		case PR_setregid32:
+		case PR_setresuid:
+		case PR_setresuid32:
+		case PR_setresgid:
+		case PR_setresgid32:
+		case PR_chroot:
+			status = handle_sigsys(tracee, config);
+			if (status < 0)
+				return status;
+			break;
+
+		default:
+			return 0;
+		}
+
+		return 1;
 	}
 
 	case TRANSLATED_PATH: {

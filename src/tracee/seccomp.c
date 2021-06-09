@@ -137,11 +137,6 @@ static int handle_seccomp_event_common(Tracee *tracee)
 		VERBOSE(tracee, 4, "SIGSYS fully handled by an extension with result set");
 		return 0;
 	}
-	if (status == 3) {
-		VERBOSE(tracee, 4, "SIGSYS partially handled by an extension, restart the syscall with the changes");
-		restart_syscall_after_seccomp(tracee);
-		return 0;
-	}
 
 	switch (sysnum) {
 	case PR_open:

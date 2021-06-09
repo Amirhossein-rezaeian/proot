@@ -119,7 +119,7 @@ static int sysvipc_shm_send_helper_request(struct SysVIpcShmHelperRequest *reque
 		if (pipe2(pipe_helper2proot, O_CLOEXEC) < 0) {
 			close(pipe_proot2helper[0]);
 			close(pipe_proot2helper[1]);
-			return -2;
+			return -1;
 		}
 		pid_t forked = fork();
 		if (forked == 0) {
@@ -150,7 +150,7 @@ static int sysvipc_shm_send_helper_request(struct SysVIpcShmHelperRequest *reque
 			close(pipe_proot2helper[1]);
 			close(pipe_helper2proot[0]);
 			close(pipe_helper2proot[1]);
-			return -3;
+			return -1;
 		} else {
 			close(pipe_proot2helper[0]);
 			close(pipe_helper2proot[1]);
@@ -158,7 +158,7 @@ static int sysvipc_shm_send_helper_request(struct SysVIpcShmHelperRequest *reque
 			if (nread != SYSVIPC_SHMHELPER_SOCKET_LEN) {
 				close(pipe_proot2helper[1]);
 				close(pipe_helper2proot[0]);
-				return -4;
+				return -1;
 			}
 			sysvipc_shm_helper_addr.sun_family = AF_UNIX;
 			launched_helper = true;
@@ -170,11 +170,7 @@ static int sysvipc_shm_send_helper_request(struct SysVIpcShmHelperRequest *reque
 	write(proot2helper, request, sizeof(*request));
 	if (request->op == SHMHELPER_ALLOC) {
 		int fd = -1;
-		ssize_t read_result = read(helper2proot, &fd, sizeof(fd));
-		if (read_result < 0)
-			return -5;
-		if (fd < 0)
-			return -6;
+		read(helper2proot, &fd, sizeof(fd));
 		return fd;
 	}
 	return 0;
@@ -222,7 +218,7 @@ int sysvipc_shmget(Tracee *tracee, struct SysVIpcConfig *config)
 		};
 		shm->fd = sysvipc_shm_send_helper_request(&request);
 		if (shm->fd < 0) {
-			return shm->fd;
+			return -ENOSPC;
 		}
 		memset(&shm->stats.shm_segsz, 0, sizeof(shm->stats.shm_segsz));
 		shm->stats.shm_perm.mode = shmflg & 0777;
