@@ -715,11 +715,14 @@ static int handle_sysenter_end(Tracee *tracee, Config *config)
 	case PR_setgroups32:
 	case PR_getgroups:
 	case PR_getgroups32:
-		/* TODO: need to actually emulate these */
-		//On Android, the system is returning gids that our rootfs knows nothing about
-		//which is generating errors
-		set_sysnum(tracee, PR_void);
-		return 0;
+		/* TODO */
+#ifdef USERLAND
+	/* TODO: need to actually emulate these */
+	//On Android, the system is returning gids that our rootfs knows nothing about
+	//which is generating errors
+	set_sysnum(tracee, PR_void);
+	return 0;
+#endif
 
 	default:
 		return 0;
@@ -884,7 +887,6 @@ static int handle_sysexit_end(Tracee *tracee, Config *config)
 		poke_reg(tracee, SYSARG_RESULT, config->umask);
 		config->umask = (mode_t) peek_reg(tracee, MODIFIED, SYSARG_1); 
 		return 0;
-#endif
 
 	case PR_setgroups:
 	case PR_setgroups32:
@@ -893,9 +895,14 @@ static int handle_sysexit_end(Tracee *tracee, Config *config)
 		/*TODO: need to really emulate*/
 		poke_reg(tracee, SYSARG_RESULT, 0);
 		return 0;
+#endif
 
 	case PR_setdomainname:
 	case PR_sethostname:
+#ifndef USERLAND
+	case PR_setgroups:
+	case PR_setgroups32:
+#endif
 	case PR_mknod:
 	case PR_mknodat:
 	case PR_capset:
@@ -1002,7 +1009,7 @@ static int handle_sigsys(Tracee *tracee, Config *config)
 	case PR_setuid:
 	case PR_setuid32:
 		SETXID(uid, CURRENT);
-		
+
 	case PR_setgid:
 	case PR_setgid32:
 		SETXID(gid, CURRENT);
