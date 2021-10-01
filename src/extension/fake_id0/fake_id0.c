@@ -715,14 +715,9 @@ static int handle_sysenter_end(Tracee *tracee, Config *config)
 	case PR_setgroups32:
 	case PR_getgroups:
 	case PR_getgroups32:
-		/* TODO */
-#ifdef USERLAND
-	/* TODO: need to actually emulate these */
-	//On Android, the system is returning gids that our rootfs knows nothing about
-	//which is generating errors
-	set_sysnum(tracee, PR_void);
-	return 0;
-#endif
+		//which is generating errors
+		set_sysnum(tracee, PR_void);
+		return 0;
 
 	default:
 		return 0;
