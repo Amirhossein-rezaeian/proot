@@ -417,6 +417,7 @@ int translate_syscall_enter(Tracee *tracee)
 
 	case PR_fchmodat:
 	case PR_faccessat:
+	case PR_faccessat2:
 	case PR_futimesat:
 	case PR_mknodat:
 		dirfd = peek_reg(tracee, CURRENT, SYSARG_1);
@@ -602,7 +603,23 @@ int translate_syscall_enter(Tracee *tracee)
 		}
 		break;
 #endif
+	
+	case PR_memfd_create:
+		{
+			char memfd_name[20] = {};
+			if (read_string(tracee, memfd_name, peek_reg(tracee, CURRENT, SYSARG_1), sizeof(memfd_name) - 1) < 0) {
+				/* Failed to read memfd name, do nothing and let normal memfd proceed.  */
+				break;
+			}
+			/* If this memfd is one of those used by Qt/QML for executable code,
+			 * deny memfd_create() call and let Qt fall back to anonymous mmap.  */
+			if (0 == strncmp(memfd_name, "JITCode:", 8)) {
+				status = -EACCES;
+			}
+			break;
+		}
 	}
+
 
 end:
 	status2 = notify_extensions(tracee, SYSCALL_ENTER_END, status, 0);

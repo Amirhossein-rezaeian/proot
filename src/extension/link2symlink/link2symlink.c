@@ -6,11 +6,13 @@
 #include <sys/stat.h>  /* lstat(2), */
 #include <errno.h>     /* E*, */
 #include <limits.h>    /* PATH_MAX, */
+#include <ctype.h>     /* isdigit, */
 
 #include "cli/note.h"
 #include "extension/extension.h"
 #include "tracee/tracee.h"
 #include "tracee/mem.h"
+#include "tracee/statx.h"
 #include "syscall/syscall.h"
 #include "syscall/sysnum.h"
 #include "path/path.h"
@@ -439,6 +441,33 @@ static int handle_sysexit_end(Tracee *tracee)
 	}
 }
 
+static void link2symlink_handle_statx(struct statx_syscall_state *state)
+{
+	if (!(state->statx_buf.stx_mask & STATX_NLINK))
+		return;
+
+	const char *path_ending = strrchr(state->host_path, '/');
+	if (NULL == path_ending)
+		return;
+
+	size_t ending_len = strlen(path_ending);
+	if (ending_len < strlen(PREFIX) + 6) /* 6 = strlen("/") + strlen(".0002") */
+		return;
+
+	if (0 != strncmp(path_ending + 1, PREFIX, strlen(PREFIX)))
+		return;
+
+	if (path_ending[ending_len - 5] != '.')
+		return;
+
+	for (size_t i = 1; i <= 4; i++) {
+		if (!isdigit(path_ending[ending_len - i]))
+			return;
+	}
+
+	state->statx_buf.stx_nlink = atoi(&path_ending[ending_len - 4]);
+}
+
 /**
  * When @translated_path is a faked hard-link, replace it with the
  * point it (internally) points to.
@@ -493,6 +522,110 @@ static void translated_path(Tracee *tracee, char translated_path[PATH_MAX])
 
 	strcpy(translated_path, path2);
 	return;
+}
+
+/**
+ * Handler for linkat(..., "/proc/X/fd/Y", ..., AT_SYMLINK_FOLLOW)
+ *
+ * Returns:
+ *    1 if operation was handled successfully
+ *      (Syscall should be marked as successful without further actions)
+ *    0 if this wasn't linkat from /proc//fd
+ *      (Caller should proceed with usual link2symlink)
+ *   <0 if operation failed
+ *      (Syscall should be marked as failed without further actions)
+ */
+static int handle_linkat_from_proc_fd(Tracee *tracee) {
+	/* Read source path, return if it doesn't belong to /proc  */
+	char proc_path[128];
+	ssize_t size = read_string(tracee, proc_path, peek_reg(tracee, CURRENT, SYSARG_2), sizeof(proc_path));
+	if (size <= 0 || size >= (ssize_t) sizeof(proc_path)) {
+		return 0;
+	}
+	if (compare_paths(proc_path, "/proc") != PATH2_IS_PREFIX) {
+		return 0;
+	}
+
+	/* Ensure provided path is symlink to " (deleted)" file  */
+	char target_path[PATH_MAX] = {};
+	int status = readlink(proc_path, target_path, sizeof(target_path));
+	if (status < 10 || status >= (ssize_t) sizeof(target_path)) {
+		return 0;
+	}
+	if (0 != memcmp(&target_path[status - 10], DELETED_SUFFIX, 10)) {
+		return 0;
+	}
+
+	/* Read stats of source file, ensure it is regular file  */
+	struct stat stats = {};
+	if (0 != stat(proc_path, &stats)) {
+		return 0;
+	}
+	if (!S_ISREG(stats.st_mode)) {
+		return 0;
+	}
+
+	/* Read path of target file (already translated by proot)  */
+	size = read_string(tracee, target_path, peek_reg(tracee, CURRENT, SYSARG_4), PATH_MAX);
+	if (size < 0 || size >= (ssize_t) sizeof(target_path)) {
+		return 0;
+	}
+
+	/* Open source file for reading  */
+	int source_fd = open(proc_path, O_RDONLY);
+	if (source_fd < 0) {
+		return 0;
+	}
+
+	/* Point of no return, below we no longer are allowed to "return 0",
+	 * any errors will be propagated to caller
+	 *
+	 * Delete target file (we'll be replacing it).
+	 * Ignore result of unlink, file could or could not exist,
+	 * we'll report failure of open though  */
+	unlink(target_path);
+
+	/* Open target file for writing  */
+	int target_fd = open(target_path, O_WRONLY|O_CREAT|O_EXCL, stats.st_mode & 0777);
+	if (target_fd < 0) {
+		status = -errno;
+		if (status >= 0)
+			status = -EPERM;
+		close(source_fd);
+		return status;
+	}
+
+	/* Copy contents of file  */
+	char buf[4096];
+	int nread;
+	while (0 != (nread = read(source_fd, buf, sizeof(buf)))) {
+		if (nread < 0) {
+			status = -errno;
+			if (status >= 0)
+				status = -EPERM;
+			close(source_fd);
+			close(target_fd);
+			return status;
+		}
+		int pos = 0;
+		while (pos < nread) {
+			int nwrite = write(target_fd, buf + pos, nread - pos);
+			if (nwrite <= 0) {
+				status = -errno;
+				if (status >= 0)
+					status = -EPERM;
+				close(source_fd);
+				close(target_fd);
+				return status;
+			}
+			pos += nwrite;
+		}
+	}
+
+	/* Copy successful, nothing more to be done for this syscall  */
+	close(source_fd);
+	close(target_fd);
+	return 1;
 }
 
 /**
@@ -607,6 +740,20 @@ int link2symlink_callback(Extension *extension, ExtensionEvent event,
 			break;
 
 		case PR_linkat:
+			/*
+			 * Handle linkat(..., "/proc/X/fd/Y", ..., AT_SYMLINK_FOLLOW)
+			 */
+			if (peek_reg(tracee, CURRENT, SYSARG_5) & AT_SYMLINK_FOLLOW) {
+				status = handle_linkat_from_proc_fd(tracee);
+				if (status < 0)
+					return status;
+				if (status == 1) {
+					set_sysnum(tracee, PR_void);
+					poke_reg(tracee, SYSARG_RESULT, 0);
+					return 0;
+				}
+			}
+
 			/* Convert:
 			 *
 			 *     int linkat(int olddirfd, const char *oldpath,
@@ -646,6 +793,10 @@ int link2symlink_callback(Extension *extension, ExtensionEvent event,
 
 	case TRANSLATED_PATH:
 		translated_path(TRACEE(extension), (char *) data1);
+		return 0;
+
+	case STATX_SYSCALL:
+		link2symlink_handle_statx((struct statx_syscall_state *) data1);
 		return 0;
 
 	default:
