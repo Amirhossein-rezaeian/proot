@@ -548,6 +548,41 @@ static int handle_seccomp_event_common(Tracee *tracee)
 		break;
 	}
 
+	case PR_fork:
+	{
+		/*
+		The raw system call interface on x86-64 and some other
+		architectures (including sh, tile, and alpha) is:
+
+		long clone(unsigned long flags, void *stack,
+           		int *parent_tid, int *child_tid,
+           		unsigned long tls);
+
+		On x86-32, and several other common architectures (including
+		score, ARM, ARM 64, PA-RISC, arc, Power PC, xtensa, and MIPS),
+		the order of the last two arguments is reversed:
+
+		long clone(unsigned long flags, void *stack,
+           		int *parent_tid, unsigned long tls,
+           		int *child_tid);
+		*/
+
+		set_sysnum(tracee, PR_clone);
+		poke_reg(tracee, SYSARG_1, SIGCHLD);
+		poke_reg(tracee, SYSARG_2, 0);
+#if defined(ARCH_X86_64)
+		poke_reg(tracee, SYSARG_3, NULL);
+		poke_reg(tracee, SYSARG_4, NULL);
+		poke_reg(tracee, SYSARG_5, 0);
+#else
+		poke_reg(tracee, SYSARG_3, NULL);
+		poke_reg(tracee, SYSARG_4, 0);
+		poke_reg(tracee, SYSARG_5, NULL);
+#endif
+		restart_syscall_after_seccomp(tracee);
+		break;
+	}
+
 	case PR_set_robust_list:
 	default:
 		/* Set errno to -ENOSYS */
