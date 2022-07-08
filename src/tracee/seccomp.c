@@ -570,15 +570,9 @@ static int handle_seccomp_event_common(Tracee *tracee)
 		set_sysnum(tracee, PR_clone);
 		poke_reg(tracee, SYSARG_1, SIGCHLD);
 		poke_reg(tracee, SYSARG_2, 0);
-#if defined(ARCH_X86_64)
-		poke_reg(tracee, SYSARG_3, NULL);
-		poke_reg(tracee, SYSARG_4, NULL);
-		poke_reg(tracee, SYSARG_5, 0);
-#else
-		poke_reg(tracee, SYSARG_3, NULL);
+		poke_reg(tracee, SYSARG_3, 0);
 		poke_reg(tracee, SYSARG_4, 0);
-		poke_reg(tracee, SYSARG_5, NULL);
-#endif
+		poke_reg(tracee, SYSARG_5, 0);
 		restart_syscall_after_seccomp(tracee);
 		break;
 	}
