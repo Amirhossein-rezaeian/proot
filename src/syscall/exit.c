@@ -529,6 +529,36 @@ void translate_syscall_exit(Tracee *tracee)
 		status = handle_statx_syscall(tracee, false);
 		break;
 
+	case PR_setitimer: {
+		struct itimerval old;
+
+		if (!tracee->restore_original_regs_after_seccomp_event)
+				goto end;
+
+		if (syscall_result < 0) {
+				status = 0;
+				break;
+		}
+
+		status = read_data(tracee, &old, peek_reg(tracee, ORIGINAL, SYSARG_3), sizeof(old));
+		if (status < 0)
+				break;
+
+		if (is_32on64_mode(tracee)) {
+			uint32_t sec = ((uint32_t*) &old)[2];
+			uint32_t usec = ((uint32_t*) &old)[3];
+			old.it_value.tv_sec = sec;
+			old.it_value.tv_usec = usec;
+		}
+
+		status = old.it_value.tv_sec;
+		/* Round to the nearest second, but never report zero seconds when the alarm is still set.  */
+		if (old.it_value.tv_usec >= 500000 ||
+			(status == 0 && old.it_value.tv_usec > 0))
+				++status;
+		break;
+	}
+
 	default:
 		goto end;
 	}
