@@ -62,6 +62,7 @@ static int handle_option_R(Tracee *tracee, const Cli *cli, const char *value);
 static int handle_option_S(Tracee *tracee, const Cli *cli, const char *value);
 static int handle_option_link2symlink(Tracee *tracee, const Cli *cli, const char *value);
 static int handle_option_sysvipc(Tracee *tracee, const Cli *cli, const char *value);
+static int handle_option_droid_files(Tracee *tracee, const Cli *cli, const char *value);
 static int handle_option_kill_on_exit(Tracee *tracee, const Cli *cli, const char *value);
 static int handle_option_L(Tracee *tracee, const Cli *cli, const char *value);
 static int handle_option_fix_selinux_xattr(Tracee *tracee, const Cli *cli, const char *value);
@@ -241,6 +242,15 @@ Copyright (C) 2015 STMicroelectronics, licensed under GPL v2 or later.",
 	  .description = "Replace hard links with symlinks, pretending they are really hardlinks",
 	  .detail = "\tEmulates hard links with symbolic links when SELinux policies\n\
 \tdo not allow hard links.",
+	},
+	{ .class = "Extension options",
+	  .arguments = {
+		{ .name = "--droid_files", .separator = '\0', .value = NULL },
+		{ .name = NULL, .separator = '\0', .value = NULL } },
+	  .handler = handle_option_droid_files,
+	  .description = "Handle accessing shared files on Android",
+	  .detail = "\tHandles fopen when it targets and file outside of the prooted file system.\n\
+\tSimple binding will not work anymore.",
 	},
 	{ .class = "Extension options",
 	  .arguments = {

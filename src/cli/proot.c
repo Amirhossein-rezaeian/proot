@@ -293,6 +293,18 @@ static int handle_option_link2symlink(Tracee *tracee, const Cli *cli UNUSED, con
 	return 0;
 }
 
+static int handle_option_droid_files(Tracee *tracee, const Cli *cli UNUSED, const char *value UNUSED)
+{
+	int status;
+
+	/* Initialize the droid_files extension.  */
+	status = initialize_extension(tracee, droid_files_callback, NULL);
+	if (status < 0)
+		note(tracee, WARNING, INTERNAL, "droid_files not initialized");
+
+	return 0;
+}
+
 static int handle_option_sysvipc(Tracee *tracee, const Cli *cli UNUSED, const char *value UNUSED)
 {
 	int status;
